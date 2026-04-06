@@ -1,9 +1,15 @@
 [package]
-name = "scribe-rs"
+name = "anyscribe"
 version = "0.1.0"
 edition = "2021"
-description = "Simple, modular, single-binary transcription from audio to text."
+description = "Simple, modular, portable transcription pipeline for audio-to-markdown processing."
 license = "Apache-2.0"
+repository = "https://github.com/jaychia/anyscribe"
+homepage = "https://github.com/jaychia/anyscribe"
+documentation = "https://docs.rs/anyscribe"
+readme = "README.md"
+keywords = ["transcription", "whisper", "audio", "speech-to-text", "pipeline"]
+categories = ["multimedia::audio", "text-processing"]
 
 [dependencies]
 async-trait = "0.1"

@@ -26,7 +26,7 @@ use crate::types::{format_duration, format_timestamp, Metadata, Segment};
 /// model: base
 /// tags:
 ///   - meeting
-///   - scribe-rs
+///   - anyscribe
 /// ---
 ///
 /// # Meeting Notes — 2026-03-14 14:30
@@ -61,7 +61,7 @@ impl MarkdownOutputSink {
             format!("model: {}", metadata.model),
             "tags:".to_string(),
             "  - meeting".to_string(),
-            "  - scribe-rs".to_string(),
+            "  - anyscribe".to_string(),
             "---".to_string(),
             String::new(),
             format!("# Meeting Notes — {display_date}"),
@@ -170,7 +170,7 @@ mod tests {
         assert!(md.contains("duration: \"0:05\""));
         assert!(md.contains("language: en"));
         assert!(md.contains("model: base"));
-        assert!(md.contains("scribe-rs"));
+        assert!(md.contains("anyscribe"));
     }
 
     #[test]

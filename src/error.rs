@@ -1,4 +1,4 @@
-//! Error types for the scribe-rs pipeline.
+//! Error types for the anyscribe pipeline.
 
 use std::path::PathBuf;
 

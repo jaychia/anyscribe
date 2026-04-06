@@ -17,9 +17,9 @@ use crate::types::{Metadata, Segment};
 /// # Example
 ///
 /// ```rust,no_run
-/// # use scribe_rs::output::multi::MultiOutputSink;
-/// # use scribe_rs::output::stdout::StdoutOutputSink;
-/// # use scribe_rs::output::markdown::MarkdownOutputSink;
+/// # use anyscribe::output::multi::MultiOutputSink;
+/// # use anyscribe::output::stdout::StdoutOutputSink;
+/// # use anyscribe::output::markdown::MarkdownOutputSink;
 /// # use std::path::PathBuf;
 /// let sink = MultiOutputSink {
 ///     sinks: vec![

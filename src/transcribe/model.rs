@@ -2,8 +2,8 @@
 //!
 //! Models are resolved in order:
 //!
-//! 1. **`SCRIBE_MODEL_PATH` env var** — use an explicit file path.
-//! 2. **Local cache** (`~/.cache/scribe-rs/models/`) — reuse a previously downloaded model.
+//! 1. **`ANYSCRIBE_MODEL_PATH` env var** — use an explicit file path.
+//! 2. **Local cache** (`~/.cache/anyscribe/models/`) — reuse a previously downloaded model.
 //! 3. **Download** from HuggingFace — fetches the ggml binary with a progress bar.
 //!
 //! Downloads use a temp-file guard: on failure, the `.tmp` file is cleaned up
@@ -27,15 +27,15 @@ fn cache_dir() -> PathBuf {
     dirs::cache_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("scribe-rs")
+        .join("anyscribe")
         .join("models")
 }
 
 /// Resolve the path to a whisper model file.
 ///
 /// Checks (in order):
-/// 1. `SCRIBE_MODEL_PATH` env var
-/// 2. Cache directory (`~/.cache/scribe-rs/models/`)
+/// 1. `ANYSCRIBE_MODEL_PATH` env var
+/// 2. Cache directory (`~/.cache/anyscribe/models/`)
 /// 3. Downloads from HuggingFace if not found
 pub fn resolve_model_path(model_size: &str) -> Result<PathBuf, ScribeError> {
     if !VALID_MODELS.contains(&model_size) {
@@ -45,13 +45,13 @@ pub fn resolve_model_path(model_size: &str) -> Result<PathBuf, ScribeError> {
     }
 
     // 1. Environment variable override
-    if let Ok(path) = std::env::var("SCRIBE_MODEL_PATH") {
+    if let Ok(path) = std::env::var("ANYSCRIBE_MODEL_PATH") {
         let p = PathBuf::from(&path);
         if p.is_file() {
             return Ok(p);
         }
         return Err(ScribeError::Transcription(format!(
-            "SCRIBE_MODEL_PATH does not exist: {path}"
+            "ANYSCRIBE_MODEL_PATH does not exist: {path}"
         )));
     }
 
@@ -175,14 +175,14 @@ mod tests {
     fn test_cache_dir_is_reasonable() {
         let dir = cache_dir();
         let s = dir.to_string_lossy();
-        assert!(s.contains("scribe-rs") && s.contains("models"));
+        assert!(s.contains("anyscribe") && s.contains("models"));
     }
 
     #[test]
     fn test_env_override_nonexistent() {
-        std::env::set_var("SCRIBE_MODEL_PATH", "/tmp/nonexistent_model_file.bin");
+        std::env::set_var("ANYSCRIBE_MODEL_PATH", "/tmp/nonexistent_model_file.bin");
         let result = resolve_model_path("base");
-        std::env::remove_var("SCRIBE_MODEL_PATH");
+        std::env::remove_var("ANYSCRIBE_MODEL_PATH");
         assert!(result.is_err());
     }
 

@@ -1,8 +1,8 @@
-//! # scribe-rs
+//! # anyscribe
 //!
 //! A modular, trait-based real-time transcription pipeline.
 //!
-//! scribe-rs defines five pipeline stages connected by bounded async channels:
+//! anyscribe defines five pipeline stages connected by bounded async channels:
 //!
 //! ```text
 //! AudioInput --> Preprocessor --> TranscriptionEngine --> Postprocessor --> OutputSink
@@ -15,13 +15,13 @@
 //! ## Quick start
 //!
 //! ```rust,no_run
-//! use scribe_rs::pipeline::PipelineRunner;
-//! use scribe_rs::preprocess::DefaultPreprocessor;
-//! use scribe_rs::postprocess::NoopPostprocessor;
-//! use scribe_rs::output::stdout::StdoutOutputSink;
-//! use scribe_rs::audio::cpal_input::CpalAudioInput;
-//! use scribe_rs::transcribe::whisper::WhisperTranscriptionEngine;
-//! use scribe_rs::types::Metadata;
+//! use anyscribe::pipeline::PipelineRunner;
+//! use anyscribe::preprocess::DefaultPreprocessor;
+//! use anyscribe::postprocess::NoopPostprocessor;
+//! use anyscribe::output::stdout::StdoutOutputSink;
+//! use anyscribe::audio::cpal_input::CpalAudioInput;
+//! use anyscribe::transcribe::whisper::WhisperTranscriptionEngine;
+//! use anyscribe::types::Metadata;
 //! use tokio_util::sync::CancellationToken;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {

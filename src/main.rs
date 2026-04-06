@@ -1,21 +1,21 @@
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
 
-use scribe_rs::audio::cpal_input::CpalAudioInput;
-use scribe_rs::config::{config_path, first_run_setup, load_config, save_config};
-use scribe_rs::output::markdown::MarkdownOutputSink;
-use scribe_rs::output::multi::MultiOutputSink;
-use scribe_rs::output::stdout::StdoutOutputSink;
-use scribe_rs::pipeline::traits::AudioInput;
-use scribe_rs::pipeline::PipelineRunner;
-use scribe_rs::postprocess::NoopPostprocessor;
-use scribe_rs::preprocess::DefaultPreprocessor;
-use scribe_rs::transcribe::whisper::WhisperTranscriptionEngine;
-use scribe_rs::types::Metadata;
+use anyscribe::audio::cpal_input::CpalAudioInput;
+use anyscribe::config::{config_path, first_run_setup, load_config, save_config};
+use anyscribe::output::markdown::MarkdownOutputSink;
+use anyscribe::output::multi::MultiOutputSink;
+use anyscribe::output::stdout::StdoutOutputSink;
+use anyscribe::pipeline::traits::AudioInput;
+use anyscribe::pipeline::PipelineRunner;
+use anyscribe::postprocess::NoopPostprocessor;
+use anyscribe::preprocess::DefaultPreprocessor;
+use anyscribe::transcribe::whisper::WhisperTranscriptionEngine;
+use anyscribe::types::Metadata;
 
 #[derive(Parser)]
 #[command(
-    name = "scribe-rs",
+    name = "anyscribe",
     about = "Simple, modular, single-binary transcription from audio to text."
 )]
 #[command(version)]
@@ -51,7 +51,7 @@ enum ConfigCommands {
     Setup,
 }
 
-fn load_and_validate_config() -> anyhow::Result<scribe_rs::config::Config> {
+fn load_and_validate_config() -> anyhow::Result<anyscribe::config::Config> {
     let mut cfg = load_config()?;
     if cfg.notes_path.is_empty() {
         cfg = first_run_setup()?;
@@ -136,7 +136,7 @@ fn cmd_list() -> anyhow::Result<()> {
     let notes_dir = config.notes_dir();
 
     if !notes_dir.exists() {
-        println!("No notes yet. Run `scribe-rs record` to get started.");
+        println!("No notes yet. Run `anyscribe record` to get started.");
         return Ok(());
     }
 
@@ -153,7 +153,7 @@ fn cmd_list() -> anyhow::Result<()> {
         .collect();
 
     if notes.is_empty() {
-        println!("No notes yet. Run `scribe-rs record` to get started.");
+        println!("No notes yet. Run `anyscribe record` to get started.");
         return Ok(());
     }
 

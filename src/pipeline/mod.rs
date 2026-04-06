@@ -26,16 +26,16 @@ use crate::types::{AudioChunk, Metadata, Segment};
 /// # Example
 ///
 /// ```rust,no_run
-/// # use scribe_rs::pipeline::PipelineRunner;
-/// # use scribe_rs::types::Metadata;
+/// # use anyscribe::pipeline::PipelineRunner;
+/// # use anyscribe::types::Metadata;
 /// # use tokio_util::sync::CancellationToken;
 /// # async fn example(
-/// #     input: Box<dyn scribe_rs::pipeline::AudioInput>,
-/// #     pre: Box<dyn scribe_rs::pipeline::Preprocessor>,
-/// #     eng: Box<dyn scribe_rs::pipeline::TranscriptionEngine>,
-/// #     post: Box<dyn scribe_rs::pipeline::Postprocessor>,
-/// #     sink: Box<dyn scribe_rs::pipeline::OutputSink>,
-/// # ) -> Result<(), scribe_rs::error::ScribeError> {
+/// #     input: Box<dyn anyscribe::pipeline::AudioInput>,
+/// #     pre: Box<dyn anyscribe::pipeline::Preprocessor>,
+/// #     eng: Box<dyn anyscribe::pipeline::TranscriptionEngine>,
+/// #     post: Box<dyn anyscribe::pipeline::Postprocessor>,
+/// #     sink: Box<dyn anyscribe::pipeline::OutputSink>,
+/// # ) -> Result<(), anyscribe::error::ScribeError> {
 /// let runner = PipelineRunner {
 ///     input,
 ///     preprocessor: pre,

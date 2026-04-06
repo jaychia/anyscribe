@@ -1,6 +1,6 @@
 //! TOML-based configuration: load, save, validate, and interactive setup.
 //!
-//! Configuration is stored at `~/.config/scribe-rs/config.toml`.
+//! Configuration is stored at `~/.config/anyscribe/config.toml`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -72,7 +72,7 @@ pub fn config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config")
-        .join("scribe-rs")
+        .join("anyscribe")
 }
 
 pub fn config_path() -> PathBuf {
@@ -82,7 +82,7 @@ pub fn config_path() -> PathBuf {
 pub fn default_notes_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".scribe-rs")
+        .join(".anyscribe")
 }
 
 pub fn load_config() -> Result<Config, ScribeError> {
@@ -109,7 +109,7 @@ pub fn first_run_setup() -> Result<Config, ScribeError> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
-    println!("\n  scribe-rs — First Run Setup\n");
+    println!("\n  anyscribe — First Run Setup\n");
 
     let default_path = default_notes_path();
     let default_display = default_path.display();

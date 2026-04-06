@@ -1,8 +1,6 @@
-# scribe-rs
+# anyscribe
 
-Simple, modular, single-binary real-time transcription. Written in Rust.
-
-scribe-rs captures audio from your microphone, runs it through a local Whisper model, and outputs timestamped transcripts — to stdout, to markdown files, or to any custom sink you build. Everything stays on your machine.
+anyscribe is a simple modular, portable transcription pipeline that runs audio-to-markdown processing pipelines. It allows for easily composing these pipelines to run on various hardware configurations (e.g. running on-device with Whisper, or using a remote transcription service. Hooking up to an audio source that is the current machine's audio inputs, or a file WAV source.) and produces an opinionated Markdown with YAML frontmatter format afterwards, making the data suitable for AI consumption.
 
 ## Architecture
 
@@ -81,26 +79,50 @@ Cancellation is cooperative — pass a `CancellationToken` and cancel it to grac
 | `OutputSink` | `MarkdownOutputSink` | Writes markdown with YAML frontmatter on completion. |
 | `OutputSink` | `MultiOutputSink` | Fans out to multiple sinks via spawned tasks + channels. |
 
+### Output format
+
+The `MarkdownOutputSink` produces files designed for AI consumption:
+
+```markdown
+---
+date: 2026-03-14T14:30:00
+duration: "5:00"
+language: en
+model: base
+tags:
+  - meeting
+  - anyscribe
+---
+
+# Meeting Notes — 2026-03-14 14:30
+
+## Transcript
+
+**[00:00]** First segment text
+
+**[00:30]** Second segment text
+```
+
 ## Usage
 
 ```bash
 # Record and transcribe (first run downloads the whisper model)
-scribe-rs record
+anyscribe record
 
 # List saved notes
-scribe-rs list
+anyscribe list
 
 # View configuration
-scribe-rs config show
+anyscribe config show
 
 # Change model (tiny/base/small/medium/large-v3)
-scribe-rs config set whisper_model small
+anyscribe config set whisper_model small
 
 # Set language (or "auto" for auto-detect)
-scribe-rs config set language en
+anyscribe config set language en
 ```
 
-Configuration is stored in `~/.config/scribe-rs/config.toml`. Models are cached in `~/.cache/scribe-rs/models/`. Set `SCRIBE_MODEL_PATH` to override model resolution.
+Configuration is stored in `~/.config/anyscribe/config.toml`. Models are cached in `~/.cache/anyscribe/models/`. Set `ANYSCRIBE_MODEL_PATH` to override model resolution.
 
 ## Building
 

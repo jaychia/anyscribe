@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use scribe_rs::error::ScribeError;
-use scribe_rs::pipeline::traits::*;
-use scribe_rs::pipeline::PipelineRunner;
-use scribe_rs::types::*;
+use anyscribe::error::ScribeError;
+use anyscribe::pipeline::traits::*;
+use anyscribe::pipeline::PipelineRunner;
+use anyscribe::types::*;
 
 // ── Mock AudioInput ────────────────────────────────────────────────
 
