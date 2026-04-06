@@ -1,0 +1,42 @@
+[package]
+name = "scribe-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Simple, modular, single-binary transcription from audio to text."
+license = "Apache-2.0"
+
+[dependencies]
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "6"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+cpal = "0.15"
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "sync",
+  "signal",
+  "time",
+  "io-std",
+  "io-util",
+] }
+tokio-util = "0.7"
+
+whisper-rs = "0.13"
+ureq = "3"
+indicatif = "0.17"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
