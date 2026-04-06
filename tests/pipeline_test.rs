@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -327,4 +328,100 @@ async fn test_pipeline_cancellation() {
     let segs = collected.lock().unwrap();
     // Should have at least the one segment from the chunk sent before cancel
     assert!(segs.len() >= 1);
+}
+
+// ── Mock TranscriptionEngine that skips certain chunks ────────────
+
+struct FailingMockTranscriptionEngine {
+    fail_on: HashSet<usize>,
+    updated_meta: Metadata,
+}
+
+#[async_trait]
+impl TranscriptionEngine for FailingMockTranscriptionEngine {
+    async fn run(
+        &mut self,
+        mut input: mpsc::Receiver<AudioChunk>,
+        output: mpsc::Sender<Segment>,
+        _cancel: CancellationToken,
+        metadata: Metadata,
+    ) -> Result<(), ScribeError> {
+        let mut chunk_idx = 0;
+        while let Some(chunk) = input.recv().await {
+            if self.fail_on.contains(&chunk_idx) {
+                // Simulate internal error handling: log and skip
+                tracing::warn!(chunk_idx, "mock: skipping chunk");
+            } else {
+                let duration = chunk.samples.len() as f64 / chunk.sample_rate as f64;
+                let seg = Segment {
+                    start: chunk_idx as f64 * duration,
+                    end: (chunk_idx + 1) as f64 * duration,
+                    text: format!("segment {chunk_idx}"),
+                };
+                if output.send(seg).await.is_err() {
+                    break;
+                }
+            }
+            chunk_idx += 1;
+        }
+
+        self.updated_meta = Metadata {
+            model: metadata.model,
+            language: Some("en".to_string()),
+        };
+
+        Ok(())
+    }
+
+    fn updated_metadata(&self) -> Metadata {
+        self.updated_meta.clone()
+    }
+}
+
+#[tokio::test]
+async fn test_pipeline_skips_failing_chunks() {
+    let collected = Arc::new(Mutex::new(Vec::new()));
+
+    let input = MockAudioInput {
+        info: AudioInputInfo {
+            sample_rate: 16000,
+            channels: 1,
+        },
+        chunks: vec![
+            vec![0.1; 1600], // chunk 0 — will succeed
+            vec![0.2; 1600], // chunk 1 — will fail
+            vec![0.3; 1600], // chunk 2 — will succeed
+            vec![0.4; 1600], // chunk 3 — will fail
+            vec![0.5; 1600], // chunk 4 — will succeed
+        ],
+    };
+
+    let fail_on: HashSet<usize> = [1, 3].into_iter().collect();
+
+    let runner = PipelineRunner::new(
+        Box::new(input),
+        Box::new(MockPreprocessor),
+        Box::new(FailingMockTranscriptionEngine {
+            fail_on,
+            updated_meta: Metadata::default(),
+        }),
+        Box::new(MockPostprocessor),
+        CancellationToken::new(),
+        Metadata::default(),
+    );
+
+    let rx = runner.subscribe();
+    let collected_clone = collected.clone();
+    let sub_h = tokio::spawn(collect_segments(rx, collected_clone));
+
+    // Pipeline should complete successfully despite chunk failures
+    runner.run().await.unwrap();
+    sub_h.await.unwrap();
+
+    let segs = collected.lock().unwrap();
+    // Only 3 of 5 chunks should produce segments
+    assert_eq!(segs.len(), 3);
+    assert_eq!(segs[0].text, "segment 0");
+    assert_eq!(segs[1].text, "segment 2");
+    assert_eq!(segs[2].text, "segment 4");
 }

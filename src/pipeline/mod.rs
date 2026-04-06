@@ -6,6 +6,7 @@ pub use traits::*;
 
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::constants::{AUDIO_CHANNEL_CAPACITY, SEGMENT_CHANNEL_CAPACITY};
 use crate::error::ScribeError;
@@ -99,6 +100,7 @@ impl PipelineRunner {
     /// every task finishes. Segments are broadcast to all subscribers.
     /// Returns the first error encountered, or `Ok(())` if all stages
     /// completed successfully.
+    #[tracing::instrument(name = "pipeline", skip_all)]
     pub async fn run(self) -> Result<(), ScribeError> {
         let (raw_tx, raw_rx) = mpsc::channel::<Vec<f32>>(AUDIO_CHANNEL_CAPACITY);
         let (proc_tx, proc_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);
@@ -109,32 +111,47 @@ impl PipelineRunner {
 
         let mut input = self.input;
         let cancel_a = self.cancel.clone();
-        let input_h = tokio::spawn(async move { input.run(raw_tx, cancel_a).await });
+        let input_h = tokio::spawn(
+            async move { input.run(raw_tx, cancel_a).await }
+                .instrument(tracing::info_span!("stage", name = "audio_input")),
+        );
 
         let mut pre = self.preprocessor;
-        let pre_h = tokio::spawn(async move { pre.run(raw_rx, proc_tx, info).await });
+        let pre_h = tokio::spawn(
+            async move { pre.run(raw_rx, proc_tx, info).await }
+                .instrument(tracing::info_span!("stage", name = "preprocessor")),
+        );
 
         let mut eng = self.engine;
         let cancel_e = self.cancel.clone();
         let meta = self.metadata.clone();
-        let eng_h = tokio::spawn(async move {
-            eng.run(proc_rx, seg_tx, cancel_e, meta).await?;
-            Ok::<_, ScribeError>(eng)
-        });
+        let eng_h = tokio::spawn(
+            async move {
+                eng.run(proc_rx, seg_tx, cancel_e, meta).await?;
+                Ok::<_, ScribeError>(eng)
+            }
+            .instrument(tracing::info_span!("stage", name = "transcription_engine")),
+        );
 
         let mut post = self.postprocessor;
-        let post_h = tokio::spawn(async move { post.run(seg_rx, post_tx).await });
+        let post_h = tokio::spawn(
+            async move { post.run(seg_rx, post_tx).await }
+                .instrument(tracing::info_span!("stage", name = "postprocessor")),
+        );
 
         // Broadcast segments from the postprocessor to all subscribers.
         let segment_tx = self.segment_tx;
-        let bcast_h = tokio::spawn(async move {
-            let mut post_rx = post_rx;
-            while let Some(seg) = post_rx.recv().await {
-                // Ignore errors — no active subscribers is fine.
-                let _ = segment_tx.send(seg);
+        let bcast_h = tokio::spawn(
+            async move {
+                let mut post_rx = post_rx;
+                while let Some(seg) = post_rx.recv().await {
+                    // Ignore errors — no active subscribers is fine.
+                    let _ = segment_tx.send(seg);
+                }
+                Ok::<_, ScribeError>(())
             }
-            Ok::<_, ScribeError>(())
-        });
+            .instrument(tracing::info_span!("stage", name = "broadcast")),
+        );
 
         let (input_r, pre_r, eng_r, post_r, bcast_r) =
             tokio::join!(input_h, pre_h, eng_h, post_h, bcast_h);

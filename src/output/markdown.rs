@@ -112,7 +112,7 @@ impl MarkdownOutputSink {
                 Ok(seg) => segments.push(seg),
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    log::warn!("markdown subscriber lagged, skipped {n} segments");
+                    tracing::warn!(skipped = n, "markdown subscriber lagged");
                 }
             }
         }
@@ -132,7 +132,7 @@ impl MarkdownOutputSink {
             source: e,
         })?;
 
-        eprintln!("Saved: {}", path.display());
+        tracing::info!(path = %path.display(), "saved transcript");
         Ok(())
     }
 }

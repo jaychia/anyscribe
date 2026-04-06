@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use indicatif::{ProgressBar, ProgressStyle};
+use tracing::info;
 
 use crate::constants::VALID_MODELS;
 use crate::error::ScribeError;
@@ -85,9 +86,7 @@ fn download_model(model_size: &str, dir: &PathBuf, filename: &str) -> Result<Pat
     let url = format!("{MODEL_BASE_URL}/{filename}");
     let dest = dir.join(filename);
 
-    eprintln!("Downloading whisper model '{model_size}'...");
-    eprintln!("  From: {url}");
-    eprintln!("  To:   {}", dest.display());
+    info!(model_size, %url, dest = %dest.display(), "downloading whisper model");
 
     std::fs::create_dir_all(dir).map_err(|e| {
         ScribeError::Transcription(format!(
@@ -157,7 +156,7 @@ fn download_model(model_size: &str, dir: &PathBuf, filename: &str) -> Result<Pat
 
     guard.keep = true;
 
-    eprintln!("  Download complete.\n");
+    info!("model download complete");
     Ok(dest)
 }
 

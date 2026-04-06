@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
 
+use tracing::{error, info};
+
 use anyscribe::audio::cpal_input::CpalAudioInput;
 use anyscribe::config::{config_path, first_run_setup, load_config, save_config};
 use anyscribe::error::ScribeError;
@@ -59,7 +61,7 @@ fn load_and_validate_config() -> anyhow::Result<anyscribe::config::Config> {
     let errors = cfg.validate();
     if !errors.is_empty() {
         for e in &errors {
-            eprintln!("Config error: {e}");
+            error!(error = %e, "config error");
         }
         anyhow::bail!("Configuration is invalid");
     }
@@ -71,11 +73,13 @@ async fn cmd_record() -> anyhow::Result<()> {
 
     let input = CpalAudioInput::new()?;
     let info = input.info();
-    eprintln!(
-        "Audio device: {}ch @ {}Hz → {}Hz mono",
-        info.channels, info.sample_rate, config.sample_rate
+    info!(
+        channels = info.channels,
+        sample_rate = info.sample_rate,
+        target_rate = config.sample_rate,
+        "audio device detected"
     );
-    eprintln!("Recording... Press Enter or Ctrl+C to stop.\n");
+    info!("recording — press Enter or Ctrl+C to stop");
 
     let engine = WhisperTranscriptionEngine::new(&config.whisper_model, config.sample_rate)?;
 
@@ -227,7 +231,7 @@ fn cmd_config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let errors = cfg.validate();
     if !errors.is_empty() {
         for e in &errors {
-            eprintln!("Config error: {e}");
+            error!(error = %e, "config error");
         }
         anyhow::bail!("Configuration is invalid");
     }
@@ -245,7 +249,9 @@ fn cmd_config_set(key: &str, value: &str) -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     match cli.command {
         Commands::Record => cmd_record().await,

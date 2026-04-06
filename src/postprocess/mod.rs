@@ -15,6 +15,7 @@ pub struct NoopPostprocessor;
 
 #[async_trait]
 impl Postprocessor for NoopPostprocessor {
+    #[tracing::instrument(name = "postprocessor", skip_all)]
     async fn run(
         &mut self,
         mut input: mpsc::Receiver<Segment>,

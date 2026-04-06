@@ -5,7 +5,7 @@
 //! are also public for use in custom preprocessing pipelines.
 
 use async_trait::async_trait;
-use log::debug;
+use tracing::debug;
 use tokio::sync::mpsc;
 
 use crate::error::ScribeError;
@@ -69,6 +69,7 @@ pub struct DefaultPreprocessor {
 
 #[async_trait]
 impl Preprocessor for DefaultPreprocessor {
+    #[tracing::instrument(name = "preprocessor", skip_all, fields(target_rate = self.target_sample_rate))]
     async fn run(
         &mut self,
         mut input: mpsc::Receiver<Vec<f32>>,

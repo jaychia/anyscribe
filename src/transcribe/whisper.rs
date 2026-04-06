@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::debug;
+use tracing::{debug, info, warn};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -30,7 +30,7 @@ impl WhisperEngine {
         let model_path = resolve_model_path(model_size)?;
         let path_str = model_path.to_string_lossy();
 
-        eprintln!("Loading Whisper model ({model_size})...");
+        info!(model_size, "loading whisper model");
         let ctx = WhisperContext::new_with_params(&path_str, WhisperContextParameters::default())
             .map_err(|e| ScribeError::Transcription(format!("failed to load model: {e}")))?;
 
@@ -136,6 +136,7 @@ pub struct WhisperTranscriptionEngine {
     engine: Arc<WhisperEngine>,
     sample_rate: u32,
     updated_metadata: Metadata,
+    skipped_chunks: u32,
 }
 
 impl WhisperTranscriptionEngine {
@@ -149,6 +150,7 @@ impl WhisperTranscriptionEngine {
             engine: Arc::new(engine),
             sample_rate,
             updated_metadata: Metadata::default(),
+            skipped_chunks: 0,
         })
     }
 
@@ -191,6 +193,7 @@ impl WhisperTranscriptionEngine {
 
 #[async_trait]
 impl TranscriptionEngine for WhisperTranscriptionEngine {
+    #[tracing::instrument(name = "transcription_engine", skip_all, fields(sample_rate = self.sample_rate))]
     async fn run(
         &mut self,
         mut input: mpsc::Receiver<AudioChunk>,
@@ -219,7 +222,7 @@ impl TranscriptionEngine for WhisperTranscriptionEngine {
                             if buffer.len() > max_buffer_samples {
                                 let excess = buffer.len() - max_buffer_samples;
                                 buffer.drain(..excess);
-                                eprintln!("WARNING: audio buffer exceeded {MAX_BUFFER_SECS}s cap, oldest audio dropped");
+                                warn!(cap_secs = MAX_BUFFER_SECS, "audio buffer exceeded cap, oldest audio dropped");
                             }
                         }
                         None => break,
@@ -242,20 +245,32 @@ impl TranscriptionEngine for WhisperTranscriptionEngine {
                     audio_chunk.len() as f64 / self.sample_rate as f64,
                 );
 
-                let (segments, lang) = self
+                match self
                     .transcribe_chunk(&audio_chunk, &metadata.language, &last_text, offset)
-                    .await?;
+                    .await
+                {
+                    Ok((segments, lang)) => {
+                        if detected_language.is_none() && !lang.is_empty() {
+                            detected_language = Some(lang);
+                        }
 
-                if detected_language.is_none() && !lang.is_empty() {
-                    detected_language = Some(lang);
-                }
-
-                if let Some(last_seg) = segments.last() {
-                    last_text = last_seg.text.clone();
-                }
-                for seg in segments {
-                    if output.send(seg).await.is_err() {
-                        return Ok(());
+                        if let Some(last_seg) = segments.last() {
+                            last_text = last_seg.text.clone();
+                        }
+                        for seg in segments {
+                            if output.send(seg).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.skipped_chunks += 1;
+                        warn!(
+                            offset = offset,
+                            skipped_total = self.skipped_chunks,
+                            error = %e,
+                            "skipping transcription chunk"
+                        );
                     }
                 }
 
@@ -272,19 +287,35 @@ impl TranscriptionEngine for WhisperTranscriptionEngine {
                 buffer.len() as f64 / self.sample_rate as f64,
             );
 
-            let (segments, lang) = self
+            match self
                 .transcribe_chunk(&buffer, &metadata.language, &last_text, offset)
-                .await?;
+                .await
+            {
+                Ok((segments, lang)) => {
+                    if detected_language.is_none() && !lang.is_empty() {
+                        detected_language = Some(lang);
+                    }
 
-            if detected_language.is_none() && !lang.is_empty() {
-                detected_language = Some(lang);
-            }
-
-            for seg in segments {
-                if output.send(seg).await.is_err() {
-                    break;
+                    for seg in segments {
+                        if output.send(seg).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.skipped_chunks += 1;
+                    warn!(
+                        offset = offset,
+                        skipped_total = self.skipped_chunks,
+                        error = %e,
+                        "skipping final transcription chunk"
+                    );
                 }
             }
+        }
+
+        if self.skipped_chunks > 0 {
+            warn!(skipped = self.skipped_chunks, "transcription chunks skipped due to errors");
         }
 
         self.updated_metadata = Metadata {

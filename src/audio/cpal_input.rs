@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use log::debug;
+use tracing::{debug, error, warn};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -79,6 +79,7 @@ impl AudioInput for CpalAudioInput {
         &self.info
     }
 
+    #[tracing::instrument(name = "audio_input", skip_all, fields(sample_rate = self.info.sample_rate, channels = self.info.channels))]
     async fn run(
         &mut self,
         output: mpsc::Sender<Vec<f32>>,
@@ -123,7 +124,7 @@ impl AudioInput for CpalAudioInput {
                         }
                     },
                     |err| {
-                        eprintln!("Audio stream error: {err}");
+                        error!(%err, "audio stream error");
                     },
                     None,
                 )
@@ -156,9 +157,7 @@ impl AudioInput for CpalAudioInput {
         debug!("audio input stopped: elapsed={elapsed:.1}s dropped_chunks={dropped}");
 
         if dropped > 0 {
-            eprintln!(
-                "WARNING: {dropped} audio chunk(s) dropped — transcription couldn't keep up."
-            );
+            warn!(dropped, "audio chunks dropped — transcription couldn't keep up");
         }
 
         Ok(())

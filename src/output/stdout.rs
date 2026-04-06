@@ -24,7 +24,7 @@ impl StdoutOutputSink {
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    log::warn!("stdout subscriber lagged, skipped {n} segments");
+                    tracing::warn!(skipped = n, "stdout subscriber lagged");
                 }
             }
         }
