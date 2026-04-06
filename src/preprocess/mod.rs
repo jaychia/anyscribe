@@ -105,6 +105,7 @@ impl Preprocessor for DefaultPreprocessor {
                 let chunk = AudioChunk {
                     samples: normalized,
                     sample_rate: self.target_sample_rate,
+                    offset_secs: 0.0,
                 };
                 if output.send(chunk).await.is_err() {
                     break;

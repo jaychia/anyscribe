@@ -2,11 +2,11 @@
 //!
 //! A modular, trait-based real-time transcription pipeline.
 //!
-//! anyscribe defines four pipeline stages connected by bounded async channels,
+//! anyscribe defines five pipeline stages connected by bounded async channels,
 //! with a broadcast channel that fans segments out to any number of subscribers:
 //!
 //! ```text
-//! AudioInput --> Preprocessor --> TranscriptionEngine --> Postprocessor -->> [subscribers]
+//! AudioInput --> Preprocessor --> Chunker --> TranscriptionEngine --> Postprocessor -->> [subscribers]
 //! ```
 //!
 //! Each stage is an `#[async_trait]` with a uniform `async fn run()` interface.
@@ -18,10 +18,12 @@
 //! ```rust,no_run
 //! use anyscribe::pipeline::PipelineRunner;
 //! use anyscribe::preprocess::DefaultPreprocessor;
+//! use anyscribe::chunk::OverlapChunker;
 //! use anyscribe::postprocess::NoopPostprocessor;
 //! use anyscribe::output::stdout::StdoutOutputSink;
 //! use anyscribe::audio::cpal_input::CpalAudioInput;
 //! use anyscribe::transcribe::whisper::WhisperTranscriptionEngine;
+//! use anyscribe::constants::{CHUNK_DURATION_SECS, OVERLAP_SECS, MAX_BUFFER_SECS};
 //! use anyscribe::types::Metadata;
 //! use tokio_util::sync::CancellationToken;
 //! use std::path::PathBuf;
@@ -30,6 +32,12 @@
 //! let runner = PipelineRunner::new(
 //!     Box::new(CpalAudioInput::new(PathBuf::from("/tmp/recording.wav"))?),
 //!     Box::new(DefaultPreprocessor { target_sample_rate: 16000 }),
+//!     Box::new(OverlapChunker {
+//!         chunk_duration_secs: CHUNK_DURATION_SECS,
+//!         overlap_secs: OVERLAP_SECS,
+//!         max_buffer_secs: MAX_BUFFER_SECS,
+//!         sample_rate: 16000,
+//!     }),
 //!     Box::new(WhisperTranscriptionEngine::new("base", 16000)?),
 //!     Box::new(NoopPostprocessor),
 //!     CancellationToken::new(),
@@ -53,6 +61,7 @@
 //! Subscribers are registered via [`PipelineRunner::subscribe`] before running.
 
 pub mod audio;
+pub mod chunk;
 pub mod config;
 pub mod constants;
 pub mod error;

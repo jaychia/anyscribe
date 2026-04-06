@@ -33,12 +33,14 @@ use crate::types::{AudioChunk, AudioNotification, Metadata, Segment};
 /// # async fn example(
 /// #     input: Box<dyn anyscribe::pipeline::AudioInput>,
 /// #     pre: Box<dyn anyscribe::pipeline::Preprocessor>,
+/// #     chk: Box<dyn anyscribe::pipeline::Chunker>,
 /// #     eng: Box<dyn anyscribe::pipeline::TranscriptionEngine>,
 /// #     post: Box<dyn anyscribe::pipeline::Postprocessor>,
 /// # ) -> Result<(), anyscribe::error::ScribeError> {
 /// let runner = PipelineRunner::new(
 ///     input,
 ///     pre,
+///     chk,
 ///     eng,
 ///     post,
 ///     CancellationToken::new(),
@@ -57,6 +59,7 @@ use crate::types::{AudioChunk, AudioNotification, Metadata, Segment};
 pub struct PipelineRunner {
     pub input: Box<dyn AudioInput>,
     pub preprocessor: Box<dyn Preprocessor>,
+    pub chunker: Box<dyn Chunker>,
     pub engine: Box<dyn TranscriptionEngine>,
     pub postprocessor: Box<dyn Postprocessor>,
     pub cancel: CancellationToken,
@@ -69,6 +72,7 @@ impl PipelineRunner {
     pub fn new(
         input: Box<dyn AudioInput>,
         preprocessor: Box<dyn Preprocessor>,
+        chunker: Box<dyn Chunker>,
         engine: Box<dyn TranscriptionEngine>,
         postprocessor: Box<dyn Postprocessor>,
         cancel: CancellationToken,
@@ -78,6 +82,7 @@ impl PipelineRunner {
         Self {
             input,
             preprocessor,
+            chunker,
             engine,
             postprocessor,
             cancel,
@@ -104,6 +109,7 @@ impl PipelineRunner {
     pub async fn run(self) -> Result<(), ScribeError> {
         let (raw_tx, raw_rx) = mpsc::channel::<AudioNotification>(AUDIO_CHANNEL_CAPACITY);
         let (proc_tx, proc_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);
+        let (chunked_tx, chunked_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);
         let (seg_tx, seg_rx) = mpsc::channel::<Segment>(SEGMENT_CHANNEL_CAPACITY);
         let (post_tx, post_rx) = mpsc::channel::<Segment>(SEGMENT_CHANNEL_CAPACITY);
 
@@ -122,12 +128,19 @@ impl PipelineRunner {
                 .instrument(tracing::info_span!("stage", name = "preprocessor")),
         );
 
+        let mut chk = self.chunker;
+        let cancel_c = self.cancel.clone();
+        let chunk_h = tokio::spawn(
+            async move { chk.run(proc_rx, chunked_tx, cancel_c).await }
+                .instrument(tracing::info_span!("stage", name = "chunker")),
+        );
+
         let mut eng = self.engine;
         let cancel_e = self.cancel.clone();
         let meta = self.metadata.clone();
         let eng_h = tokio::spawn(
             async move {
-                eng.run(proc_rx, seg_tx, cancel_e, meta).await?;
+                eng.run(chunked_rx, seg_tx, cancel_e, meta).await?;
                 Ok::<_, ScribeError>(eng)
             }
             .instrument(tracing::info_span!("stage", name = "transcription_engine")),
@@ -153,11 +166,12 @@ impl PipelineRunner {
             .instrument(tracing::info_span!("stage", name = "broadcast")),
         );
 
-        let (input_r, pre_r, eng_r, post_r, bcast_r) =
-            tokio::join!(input_h, pre_h, eng_h, post_h, bcast_h);
+        let (input_r, pre_r, chunk_r, eng_r, post_r, bcast_r) =
+            tokio::join!(input_h, pre_h, chunk_h, eng_h, post_h, bcast_h);
 
         input_r.map_err(|e| ScribeError::Pipeline(format!("audio panicked: {e}")))??;
         pre_r.map_err(|e| ScribeError::Pipeline(format!("preprocess panicked: {e}")))??;
+        chunk_r.map_err(|e| ScribeError::Pipeline(format!("chunker panicked: {e}")))??;
         eng_r.map_err(|e| ScribeError::Pipeline(format!("transcribe panicked: {e}")))??;
         post_r.map_err(|e| ScribeError::Pipeline(format!("postprocess panicked: {e}")))??;
         bcast_r.map_err(|e| ScribeError::Pipeline(format!("broadcast panicked: {e}")))??;

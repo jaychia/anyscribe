@@ -27,12 +27,17 @@ pub struct AudioNotification {
 /// A preprocessed chunk of audio ready for transcription.
 ///
 /// Contains mono, resampled, normalized `f32` PCM samples.
+/// The `offset_secs` field indicates the absolute time position of this chunk
+/// within the recording — set by the [`Chunker`](crate::pipeline::traits::Chunker) stage.
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
     /// Mono PCM samples, normalized to peak 0.95.
     pub samples: Vec<f32>,
     /// Sample rate of the contained audio (typically 16 kHz for Whisper).
     pub sample_rate: u32,
+    /// Time offset from the start of the recording, in seconds.
+    /// Set by the chunker stage; the preprocessor emits chunks with `0.0`.
+    pub offset_secs: f64,
 }
 
 /// Metadata carried through the pipeline.

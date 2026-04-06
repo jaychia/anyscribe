@@ -20,11 +20,11 @@ Preparing anyscribe to run as a long-lived server engine behind an AI agent, tar
 - [ ] Add file rotation (e.g., hourly) for all-day transcription
 - [ ] ~A crash at 5pm currently loses everything since morning~ — raw audio now survives crashes on disk (WAV buffer); only un-flushed transcription segments are lost. Could re-process the WAV to recover.
 
-## Priority 4: Extract windowing from transcription engine
+## Priority 4: Extract windowing from transcription engine ✅
 
-- [ ] The 30s window + 5s overlap logic is baked into `WhisperTranscriptionEngine::run()`
-- [ ] Remote APIs (Deepgram, AssemblyAI, OpenAI) need different chunking strategies
-- [ ] Make windowing a reusable component so engine impls only handle "audio in, segments out"
+- [x] The 30s window + 5s overlap logic is baked into `WhisperTranscriptionEngine::run()`
+- [x] Remote APIs (Deepgram, AssemblyAI, OpenAI) need different chunking strategies
+- [x] Make windowing a reusable component so engine impls only handle "audio in, segments out"
 
 ## Priority 5: Memory stability for all-day operation
 

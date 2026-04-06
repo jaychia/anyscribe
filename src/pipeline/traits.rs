@@ -82,6 +82,25 @@ pub trait Preprocessor: Send {
     ) -> Result<(), ScribeError>;
 }
 
+/// Accumulates preprocessed audio chunks into transcription-ready windows.
+///
+/// Receives small [`AudioChunk`]s from the preprocessor, buffers them according
+/// to a windowing strategy, and emits larger [`AudioChunk`]s with correct
+/// `offset_secs` for the transcription engine. Respects `cancel` for graceful
+/// shutdown (drains remaining audio before exiting).
+///
+/// See [`crate::chunk::OverlapChunker`] for the default windowing strategy
+/// and [`crate::chunk::PassthroughChunker`] for APIs that handle their own chunking.
+#[async_trait]
+pub trait Chunker: Send {
+    async fn run(
+        &mut self,
+        input: mpsc::Receiver<AudioChunk>,
+        output: mpsc::Sender<AudioChunk>,
+        cancel: CancellationToken,
+    ) -> Result<(), ScribeError>;
+}
+
 /// Converts preprocessed audio into timestamped text segments.
 ///
 /// Accumulates [`AudioChunk`]s into transcription windows, runs inference,

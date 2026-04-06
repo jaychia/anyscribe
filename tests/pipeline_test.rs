@@ -6,6 +6,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use anyscribe::audio::wav::WavWriter;
+use anyscribe::chunk::PassthroughChunker;
 use anyscribe::error::ScribeError;
 use anyscribe::pipeline::traits::*;
 use anyscribe::pipeline::PipelineRunner;
@@ -73,6 +74,7 @@ impl Preprocessor for MockPreprocessor {
             let chunk = AudioChunk {
                 samples: raw,
                 sample_rate: info.sample_rate,
+                offset_secs: 0.0,
             };
             if output.send(chunk).await.is_err() {
                 break;
@@ -101,8 +103,8 @@ impl TranscriptionEngine for MockTranscriptionEngine {
         while let Some(chunk) = input.recv().await {
             let duration = chunk.samples.len() as f64 / chunk.sample_rate as f64;
             let seg = Segment {
-                start: seg_idx as f64 * duration,
-                end: (seg_idx + 1) as f64 * duration,
+                start: chunk.offset_secs,
+                end: chunk.offset_secs + duration,
                 text: format!("segment {seg_idx}"),
             };
             seg_idx += 1;
@@ -191,6 +193,7 @@ async fn test_pipeline_end_to_end() {
     let runner = PipelineRunner::new(
         Box::new(input),
         Box::new(MockPreprocessor),
+        Box::new(PassthroughChunker),
         Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
@@ -230,6 +233,7 @@ async fn test_pipeline_multiple_subscribers() {
     let runner = PipelineRunner::new(
         Box::new(input),
         Box::new(MockPreprocessor),
+        Box::new(PassthroughChunker),
         Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
@@ -265,6 +269,7 @@ async fn test_pipeline_empty_input() {
     let runner = PipelineRunner::new(
         Box::new(input),
         Box::new(MockPreprocessor),
+        Box::new(PassthroughChunker),
         Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
@@ -334,6 +339,7 @@ async fn test_pipeline_cancellation() {
             },
         }),
         Box::new(MockPreprocessor),
+        Box::new(PassthroughChunker),
         Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
@@ -384,8 +390,8 @@ impl TranscriptionEngine for FailingMockTranscriptionEngine {
             } else {
                 let duration = chunk.samples.len() as f64 / chunk.sample_rate as f64;
                 let seg = Segment {
-                    start: chunk_idx as f64 * duration,
-                    end: (chunk_idx + 1) as f64 * duration,
+                    start: chunk.offset_secs,
+                    end: chunk.offset_secs + duration,
                     text: format!("segment {chunk_idx}"),
                 };
                 if output.send(seg).await.is_err() {
@@ -429,6 +435,7 @@ async fn test_pipeline_skips_failing_chunks() {
     let runner = PipelineRunner::new(
         Box::new(input),
         Box::new(MockPreprocessor),
+        Box::new(PassthroughChunker),
         Box::new(FailingMockTranscriptionEngine {
             fail_on,
             updated_meta: Metadata::default(),

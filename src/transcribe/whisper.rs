@@ -1,7 +1,7 @@
 //! Whisper-based transcription engine.
 //!
-//! Accumulates audio into 30-second windows with 5-second overlap,
-//! runs whisper inference on a blocking thread pool, and emits
+//! Receives pre-chunked audio from the [`Chunker`](crate::pipeline::traits::Chunker)
+//! stage, runs whisper inference on a blocking thread pool, and emits
 //! timestamped [`Segment`]s.
 
 use std::sync::Arc;
@@ -12,7 +12,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::constants::{CHUNK_DURATION_SECS, MAX_BUFFER_SECS, OVERLAP_SECS};
 use crate::error::ScribeError;
 use crate::pipeline::traits::TranscriptionEngine;
 use crate::preprocess::normalize;
@@ -113,13 +112,10 @@ struct TranscribeResult {
 
 /// Local Whisper transcription engine using whisper-rs (whisper.cpp).
 ///
-/// # Windowing strategy
-///
-/// Audio is accumulated into a buffer. When the buffer reaches 30 seconds,
-/// a window is extracted and transcribed. After transcription, the last 5
-/// seconds are kept as overlap for cross-boundary context. This continues
-/// until the input channel closes or cancellation is requested. Any remaining
-/// audio (> 1 second) is transcribed as a final chunk.
+/// Receives pre-chunked audio from the [`Chunker`](crate::pipeline::traits::Chunker)
+/// stage and runs inference on each chunk. Windowing (buffer accumulation, overlap)
+/// is handled upstream by the chunker — this engine simply transcribes whatever
+/// audio it receives.
 ///
 /// # Blocking work
 ///
@@ -152,6 +148,49 @@ impl WhisperTranscriptionEngine {
             updated_metadata: Metadata::default(),
             skipped_chunks: 0,
         })
+    }
+
+    async fn transcribe_and_send(
+        &mut self,
+        chunk: &AudioChunk,
+        metadata: &Metadata,
+        last_text: &mut String,
+        detected_language: &mut Option<String>,
+        output: &mpsc::Sender<Segment>,
+    ) {
+        let offset = chunk.offset_secs;
+        debug!(
+            "transcribing chunk ({:.1}s), offset={offset:.1}s",
+            chunk.samples.len() as f64 / self.sample_rate as f64,
+        );
+
+        match self
+            .transcribe_chunk(&chunk.samples, &metadata.language, last_text, offset)
+            .await
+        {
+            Ok((segments, lang)) => {
+                if detected_language.is_none() && !lang.is_empty() {
+                    *detected_language = Some(lang);
+                }
+                if let Some(last_seg) = segments.last() {
+                    *last_text = last_seg.text.clone();
+                }
+                for seg in segments {
+                    if output.send(seg).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                self.skipped_chunks += 1;
+                warn!(
+                    offset = offset,
+                    skipped_total = self.skipped_chunks,
+                    error = %e,
+                    "skipping transcription chunk"
+                );
+            }
+        }
     }
 
     async fn transcribe_chunk(
@@ -201,117 +240,34 @@ impl TranscriptionEngine for WhisperTranscriptionEngine {
         cancel: CancellationToken,
         metadata: Metadata,
     ) -> Result<(), ScribeError> {
-        let chunk_samples = (CHUNK_DURATION_SECS * self.sample_rate as f64) as usize;
-        let overlap_samples = (OVERLAP_SECS * self.sample_rate as f64) as usize;
-        let max_buffer_samples = (MAX_BUFFER_SECS * self.sample_rate as f64) as usize;
-
-        let mut buffer: Vec<f32> = Vec::new();
-        let mut offset: f64 = 0.0;
         let mut last_text = String::new();
         let mut detected_language = metadata.language.clone();
 
         loop {
-            tokio::select! {
+            let chunk = tokio::select! {
                 biased;
                 chunk = input.recv() => {
                     match chunk {
-                        Some(data) => {
-                            buffer.extend_from_slice(&data.samples);
-
-                            // Enforce max buffer cap
-                            if buffer.len() > max_buffer_samples {
-                                let excess = buffer.len() - max_buffer_samples;
-                                buffer.drain(..excess);
-                                warn!(cap_secs = MAX_BUFFER_SECS, "audio buffer exceeded cap, oldest audio dropped");
-                            }
-                        }
+                        Some(data) => data,
                         None => break,
                     }
                 }
                 _ = cancel.cancelled() => {
+                    // Drain any remaining chunks from the chunker.
                     while let Ok(data) = input.try_recv() {
-                        buffer.extend_from_slice(&data.samples);
+                        self.transcribe_and_send(
+                            &data, &metadata, &mut last_text,
+                            &mut detected_language, &output,
+                        ).await;
                     }
                     break;
                 }
-            }
+            };
 
-            while buffer.len() >= chunk_samples {
-                let audio_chunk: Vec<f32> = buffer[..chunk_samples].to_vec();
-                buffer = buffer[chunk_samples - overlap_samples..].to_vec();
-
-                debug!(
-                    "transcribing window ({:.1}s), offset={offset:.1}s",
-                    audio_chunk.len() as f64 / self.sample_rate as f64,
-                );
-
-                match self
-                    .transcribe_chunk(&audio_chunk, &metadata.language, &last_text, offset)
-                    .await
-                {
-                    Ok((segments, lang)) => {
-                        if detected_language.is_none() && !lang.is_empty() {
-                            detected_language = Some(lang);
-                        }
-
-                        if let Some(last_seg) = segments.last() {
-                            last_text = last_seg.text.clone();
-                        }
-                        for seg in segments {
-                            if output.send(seg).await.is_err() {
-                                return Ok(());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        self.skipped_chunks += 1;
-                        warn!(
-                            offset = offset,
-                            skipped_total = self.skipped_chunks,
-                            error = %e,
-                            "skipping transcription chunk"
-                        );
-                    }
-                }
-
-                offset += CHUNK_DURATION_SECS - OVERLAP_SECS;
-            }
-        }
-
-        // Process remaining buffer (if > 1 second of audio)
-        let min_samples = self.sample_rate as usize;
-        if buffer.len() > min_samples {
-            debug!(
-                "final buffer: {} samples ({:.1}s)",
-                buffer.len(),
-                buffer.len() as f64 / self.sample_rate as f64,
-            );
-
-            match self
-                .transcribe_chunk(&buffer, &metadata.language, &last_text, offset)
-                .await
-            {
-                Ok((segments, lang)) => {
-                    if detected_language.is_none() && !lang.is_empty() {
-                        detected_language = Some(lang);
-                    }
-
-                    for seg in segments {
-                        if output.send(seg).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    self.skipped_chunks += 1;
-                    warn!(
-                        offset = offset,
-                        skipped_total = self.skipped_chunks,
-                        error = %e,
-                        "skipping final transcription chunk"
-                    );
-                }
-            }
+            self.transcribe_and_send(
+                &chunk, &metadata, &mut last_text,
+                &mut detected_language, &output,
+            ).await;
         }
 
         if self.skipped_chunks > 0 {

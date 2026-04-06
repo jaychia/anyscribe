@@ -106,6 +106,45 @@ impl WavWriter {
     }
 }
 
+// ── In-memory encoding ───────────────────────────────────────────
+
+/// Encodes mono f32 PCM samples as a complete WAV file in memory.
+///
+/// Returns the raw bytes of a valid RIFF/WAVE container with 32-bit IEEE
+/// float PCM. Useful for remote transcription APIs that accept WAV uploads.
+pub fn encode_wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let channels: u16 = 1;
+    let data_size = (samples.len() * 4) as u32;
+    let byte_rate = sample_rate * channels as u32 * (BITS_PER_SAMPLE / 8) as u32;
+    let block_align = channels * (BITS_PER_SAMPLE / 8);
+
+    let mut buf = Vec::with_capacity(WAV_HEADER_SIZE as usize + data_size as usize);
+
+    // RIFF header
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(data_size + 36).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+
+    // fmt subchunk
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&FORMAT_IEEE_FLOAT.to_le_bytes());
+    buf.extend_from_slice(&channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&block_align.to_le_bytes());
+    buf.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes());
+
+    // data subchunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_size.to_le_bytes());
+    for &s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+
+    buf
+}
+
 // ── Reader ────────────────────────────────────────────────────────
 
 /// Reads f32 samples from a WAV file, starting after the 44-byte header.
@@ -247,5 +286,31 @@ mod tests {
 
         let data_size = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
         assert_eq!(data_size, 0);
+    }
+
+    #[test]
+    fn test_encode_wav_bytes_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("encoded.wav");
+
+        let samples: Vec<f32> = (0..160).map(|i| (i as f32 * 0.005).sin()).collect();
+        let bytes = encode_wav_bytes(&samples, 16000);
+
+        // Write to disk so WavReader can read it back
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut reader = WavReader::new(&path).unwrap();
+        let read_back = reader.read_samples(160).unwrap();
+
+        assert_eq!(samples.len(), read_back.len());
+        for (a, b) in samples.iter().zip(read_back.iter()) {
+            assert!((a - b).abs() < f32::EPSILON);
+        }
+
+        // Verify header correctness
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        let data_size = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
+        assert_eq!(data_size, 160 * 4);
     }
 }

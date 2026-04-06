@@ -28,6 +28,18 @@ pub struct Config {
     pub language: Option<String>,
     #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
+    /// Transcription engine: "whisper" (default) or "openai".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcription_engine: Option<String>,
+    /// API key for OpenAI-compatible transcription. Also reads `OPENAI_API_KEY` env var.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_api_key: Option<String>,
+    /// Base URL for OpenAI-compatible API (default: `https://api.openai.com`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_base_url: Option<String>,
+    /// Model name for OpenAI-compatible API (default: `whisper-1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_model: Option<String>,
 }
 
 impl Default for Config {
@@ -37,6 +49,10 @@ impl Default for Config {
             whisper_model: default_model(),
             language: None,
             sample_rate: default_sample_rate(),
+            transcription_engine: None,
+            openai_api_key: None,
+            openai_base_url: None,
+            openai_model: None,
         }
     }
 }
@@ -233,6 +249,7 @@ mod tests {
             whisper_model: "small".to_string(),
             language: Some("en".to_string()),
             sample_rate: 16000,
+            ..Config::default()
         };
 
         let contents = toml::to_string_pretty(&cfg).unwrap();

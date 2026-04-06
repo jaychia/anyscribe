@@ -4,14 +4,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use anyscribe::audio::cpal_input::CpalAudioInput;
+use anyscribe::chunk::OverlapChunker;
 use anyscribe::config::{config_path, first_run_setup, load_config, save_config};
+use anyscribe::constants::{CHUNK_DURATION_SECS, MAX_BUFFER_SECS, OVERLAP_SECS};
 use anyscribe::error::ScribeError;
 use anyscribe::output::markdown::MarkdownOutputSink;
 use anyscribe::output::stdout::StdoutOutputSink;
-use anyscribe::pipeline::traits::AudioInput;
+use anyscribe::pipeline::traits::{AudioInput, Chunker, TranscriptionEngine};
 use anyscribe::pipeline::PipelineRunner;
 use anyscribe::postprocess::NoopPostprocessor;
 use anyscribe::preprocess::DefaultPreprocessor;
+use anyscribe::transcribe::openai::OpenAiTranscriptionEngine;
 use anyscribe::transcribe::whisper::WhisperTranscriptionEngine;
 use anyscribe::types::Metadata;
 
@@ -91,7 +94,50 @@ async fn cmd_record() -> anyhow::Result<()> {
     );
     info!("recording — press Enter or Ctrl+C to stop");
 
-    let engine = WhisperTranscriptionEngine::new(&config.whisper_model, config.sample_rate)?;
+    let engine_name = config.transcription_engine.as_deref().unwrap_or("whisper");
+
+    let (engine, chunker): (Box<dyn TranscriptionEngine>, Box<dyn Chunker>) = match engine_name {
+        "openai" => {
+            let api_key = config
+                .openai_api_key
+                .clone()
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "OpenAI API key not set. Set openai_api_key in config or OPENAI_API_KEY env var."
+                ))?;
+
+            let mut eng = OpenAiTranscriptionEngine::new(api_key, config.sample_rate);
+            if let Some(ref url) = config.openai_base_url {
+                eng = eng.with_base_url(url.clone());
+            }
+            if let Some(ref model) = config.openai_model {
+                eng = eng.with_model(model.clone());
+            }
+
+            // No overlap needed for stateless API calls.
+            let chunker = OverlapChunker {
+                chunk_duration_secs: CHUNK_DURATION_SECS,
+                overlap_secs: 0.0,
+                max_buffer_secs: MAX_BUFFER_SECS,
+                sample_rate: config.sample_rate,
+            };
+
+            info!(engine = "openai", "using OpenAI-compatible transcription engine");
+            (Box::new(eng), Box::new(chunker))
+        }
+        _ => {
+            let eng = WhisperTranscriptionEngine::new(&config.whisper_model, config.sample_rate)?;
+            let chunker = OverlapChunker {
+                chunk_duration_secs: CHUNK_DURATION_SECS,
+                overlap_secs: OVERLAP_SECS,
+                max_buffer_secs: MAX_BUFFER_SECS,
+                sample_rate: config.sample_rate,
+            };
+
+            info!(engine = "whisper", model = %config.whisper_model, "using local Whisper engine");
+            (Box::new(eng), Box::new(chunker))
+        }
+    };
 
     let cancel = CancellationToken::new();
 
@@ -112,8 +158,13 @@ async fn cmd_record() -> anyhow::Result<()> {
         cancel_clone.cancel();
     });
 
+    let model_name = match engine_name {
+        "openai" => config.openai_model.as_deref().unwrap_or("whisper-1").to_string(),
+        _ => config.whisper_model.clone(),
+    };
+
     let metadata = Metadata {
-        model: config.whisper_model.clone(),
+        model: model_name,
         language: config.language.clone(),
     };
 
@@ -122,7 +173,8 @@ async fn cmd_record() -> anyhow::Result<()> {
         Box::new(DefaultPreprocessor {
             target_sample_rate: config.sample_rate,
         }),
-        Box::new(engine),
+        chunker,
+        engine,
         Box::new(NoopPostprocessor),
         cancel,
         metadata.clone(),
