@@ -5,6 +5,7 @@
 //! are also public for use in custom preprocessing pipelines.
 
 use async_trait::async_trait;
+use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 use tracing::debug;
 use tokio::sync::mpsc;
 
@@ -26,23 +27,33 @@ pub fn to_mono(data: &[f32], channels: u16) -> Vec<f32> {
         .collect()
 }
 
-/// Linear interpolation resample from `from_rate` to `to_rate`.
+/// Sinc resample from `from_rate` to `to_rate` using the `rubato` crate.
+///
+/// Uses a high-quality windowed sinc interpolation that avoids the aliasing
+/// artifacts of linear interpolation.
 pub fn resample(data: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate || data.is_empty() {
         return data.to_vec();
     }
-    let ratio = from_rate as f64 / to_rate as f64;
-    let out_len = (data.len() as f64 / ratio) as usize;
-    (0..out_len)
-        .map(|i| {
-            let src = i as f64 * ratio;
-            let idx = src as usize;
-            let frac = src - idx as f64;
-            let a = data[idx];
-            let b = data.get(idx + 1).copied().unwrap_or(a);
-            a + (b - a) * frac as f32
-        })
-        .collect()
+    let params = SincInterpolationParameters {
+        sinc_len: 64,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 128,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    let mut resampler = SincFixedIn::<f32>::new(
+        to_rate as f64 / from_rate as f64,
+        2.0,
+        params,
+        data.len(),
+        1,
+    )
+    .expect("valid resample parameters");
+    let waves = resampler
+        .process(&[data], None)
+        .expect("resample failed");
+    waves.into_iter().next().unwrap()
 }
 
 /// Peak-normalize audio to TARGET_PEAK. Skips silence.
@@ -59,7 +70,7 @@ pub fn normalize(audio: &[f32]) -> Vec<f32> {
     audio.iter().map(|s| s * gain).collect()
 }
 
-/// Default preprocessor: mono downmix -> linear resample -> peak normalize.
+/// Default preprocessor: mono downmix -> sinc resample -> peak normalize.
 ///
 /// Reads audio samples from the WAV disk buffer based on notifications,
 /// converts raw device audio (arbitrary channels and sample rate) into
@@ -136,8 +147,9 @@ mod tests {
     fn test_resample_downsample() {
         let data: Vec<f32> = (0..48000).map(|i| i as f32).collect();
         let out = resample(&data, 48000, 16000);
-        assert_eq!(out.len(), 16000);
-        assert!(out[0].abs() < 0.01);
+        // Sinc resampling output length is approximate due to filter delay
+        let expected = 16000i64;
+        assert!((out.len() as i64 - expected).abs() < 20, "expected ~{expected}, got {}", out.len());
     }
 
     #[test]
@@ -173,8 +185,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wav_path = dir.path().join("test.wav");
 
-        // Write test data to WAV file
-        let stereo: Vec<f32> = (0..480).map(|i| (i % 2) as f32).collect();
+        // Write test data to WAV file (4800 stereo samples = 100ms at 48kHz)
+        let stereo: Vec<f32> = (0..4800).map(|i| (i % 2) as f32).collect();
         let mut writer = WavWriter::new(&wav_path, 48000, 2).unwrap();
         writer.write_samples(&stereo).unwrap();
         writer.finalize().unwrap();
@@ -194,16 +206,19 @@ mod tests {
 
         let handle = tokio::spawn(async move { pre.run(notif_rx, proc_tx, info).await });
 
-        // Send notification: 480 interleaved stereo samples = 240 mono frames at 48kHz
-        // After resample to 16kHz: 240 / 3 = 80 samples
+        // Send notification: 4800 interleaved stereo samples = 2400 mono frames at 48kHz
+        // After resample to 16kHz: 2400 / 3 ≈ 800 samples
         notif_tx
-            .send(AudioNotification { num_samples: 480 })
+            .send(AudioNotification { num_samples: 4800 })
             .await
             .unwrap();
         drop(notif_tx);
 
         let chunk = proc_rx.recv().await.unwrap();
-        assert_eq!(chunk.samples.len(), 80);
+        // Sinc resampling output length is approximate due to filter delay
+        let expected = 800i64;
+        assert!((chunk.samples.len() as i64 - expected).abs() < 20,
+            "expected ~{expected}, got {}", chunk.samples.len());
         assert_eq!(chunk.sample_rate, 16000);
 
         assert!(proc_rx.recv().await.is_none());

@@ -38,10 +38,10 @@ Preparing anyscribe to run as a long-lived server engine behind an AI agent, tar
 - [ ] `PipelineRunner` returns the engine from its join handle but never calls `updated_metadata()`
 - [ ] `MarkdownOutputSink` receives initial metadata, not the detected language from transcription
 
-## Priority 7: Better resampler
+## Priority 7: Better resampler ✅
 
-- [ ] Linear interpolation (`preprocess/mod.rs`) introduces aliasing that degrades transcription accuracy
-- [ ] Switch to `rubato` crate for meaningful quality improvement
+- [x] Linear interpolation (`preprocess/mod.rs`) introduces aliasing that degrades transcription accuracy
+- [x] Switch to `rubato` crate for meaningful quality improvement
 
 ## Other
 
