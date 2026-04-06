@@ -72,13 +72,13 @@ async fn cmd_record() -> anyhow::Result<()> {
     let config = load_and_validate_config()?;
 
     let recorded_at = chrono::Local::now().naive_local();
-    let notes_dir = config.notes_dir();
-    std::fs::create_dir_all(&notes_dir)?;
+    let recordings_dir = config.recordings_dir();
+    std::fs::create_dir_all(&recordings_dir)?;
 
     let wav_filename = recorded_at
         .format("%Y-%m-%d_%H-%M_recording.wav")
         .to_string();
-    let wav_path = notes_dir.join(&wav_filename);
+    let wav_path = recordings_dir.join(&wav_filename);
 
     let input = CpalAudioInput::new(wav_path.clone())?;
     let input_info = input.info();

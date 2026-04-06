@@ -42,8 +42,16 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn notes_dir(&self) -> PathBuf {
+    pub fn base_dir(&self) -> PathBuf {
         PathBuf::from(&self.notes_path)
+    }
+
+    pub fn notes_dir(&self) -> PathBuf {
+        self.base_dir().join("notes")
+    }
+
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.base_dir().join("recordings")
     }
 
     pub fn validate(&self) -> Vec<String> {
@@ -165,12 +173,17 @@ mod tests {
     }
 
     #[test]
-    fn test_config_notes_dir() {
+    fn test_config_dirs() {
         let cfg = Config {
-            notes_path: "/tmp/notes".to_string(),
+            notes_path: "/tmp/anyscribe".to_string(),
             ..Config::default()
         };
-        assert_eq!(cfg.notes_dir(), PathBuf::from("/tmp/notes"));
+        assert_eq!(cfg.base_dir(), PathBuf::from("/tmp/anyscribe"));
+        assert_eq!(cfg.notes_dir(), PathBuf::from("/tmp/anyscribe/notes"));
+        assert_eq!(
+            cfg.recordings_dir(),
+            PathBuf::from("/tmp/anyscribe/recordings")
+        );
     }
 
     #[test]
