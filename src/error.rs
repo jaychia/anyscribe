@@ -1,5 +1,11 @@
+//! Error types for the scribe-rs pipeline.
+
 use std::path::PathBuf;
 
+/// Errors that can occur during pipeline execution.
+///
+/// Each variant corresponds to a specific subsystem. All pipeline stages
+/// return `Result<(), ScribeError>`.
 #[derive(Debug, thiserror::Error)]
 pub enum ScribeError {
     #[error("Configuration error: {0}")]

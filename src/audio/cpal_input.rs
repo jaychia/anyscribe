@@ -1,3 +1,5 @@
+//! Default audio input using the system microphone via cpal.
+
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -10,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::ScribeError;
 use crate::pipeline::traits::{AudioInput, AudioInputInfo};
 
+/// Atomic counters shared between the cpal callback thread and the async runtime.
 struct SharedState {
     total_frames: AtomicU64,
     dropped_chunks: AtomicU32,
@@ -24,12 +27,30 @@ impl SharedState {
     }
 }
 
+/// Captures audio from the default system input device using cpal.
+///
+/// # Threading model
+///
+/// cpal's `Stream` is `!Send`, so it cannot live in a tokio task. Instead,
+/// [`run()`](AudioInput::run) spawns a dedicated OS thread that owns the
+/// stream. The cpal hardware callback pushes raw PCM via `try_send` into
+/// a bounded channel — if the pipeline falls behind, chunks are dropped
+/// and counted rather than blocking the audio thread.
+///
+/// # Construction
+///
+/// [`CpalAudioInput::new()`] enumerates the default input device and reads
+/// its native format. [`AudioInput::info()`] is available immediately and
+/// returns the device's sample rate and channel count.
 pub struct CpalAudioInput {
     info: AudioInputInfo,
     state: Arc<SharedState>,
 }
 
 impl CpalAudioInput {
+    /// Creates a new audio input by probing the default system input device.
+    ///
+    /// Fails if no input device is available or the device format cannot be read.
     pub fn new() -> Result<Self, ScribeError> {
         let host = cpal::default_host();
         let device = host

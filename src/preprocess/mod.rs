@@ -1,3 +1,9 @@
+//! Audio preprocessing: mono downmix, resampling, and peak normalization.
+//!
+//! The [`DefaultPreprocessor`] chains these three operations in its async
+//! run loop. The individual functions ([`to_mono`], [`resample`], [`normalize`])
+//! are also public for use in custom preprocessing pipelines.
+
 use async_trait::async_trait;
 use log::debug;
 use tokio::sync::mpsc;
@@ -8,7 +14,7 @@ use crate::types::AudioChunk;
 
 const TARGET_PEAK: f32 = 0.95;
 
-/// Downmix multi-channel interleaved audio to mono.
+/// Downmixes multi-channel interleaved audio to mono by averaging channels.
 pub fn to_mono(data: &[f32], channels: u16) -> Vec<f32> {
     if channels == 1 {
         return data.to_vec();
@@ -52,7 +58,12 @@ pub fn normalize(audio: &[f32]) -> Vec<f32> {
     audio.iter().map(|s| s * gain).collect()
 }
 
+/// Default preprocessor: mono downmix -> linear resample -> peak normalize.
+///
+/// Converts raw device audio (arbitrary channels and sample rate) into
+/// normalized mono [`AudioChunk`]s at `target_sample_rate`.
 pub struct DefaultPreprocessor {
+    /// Target sample rate for output chunks (typically 16000 for Whisper).
     pub target_sample_rate: u32,
 }
 

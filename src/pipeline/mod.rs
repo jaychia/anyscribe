@@ -1,3 +1,5 @@
+//! Pipeline runner and trait re-exports.
+
 pub mod traits;
 
 pub use traits::*;
@@ -9,6 +11,43 @@ use crate::constants::{AUDIO_CHANNEL_CAPACITY, SEGMENT_CHANNEL_CAPACITY};
 use crate::error::ScribeError;
 use crate::types::{AudioChunk, Metadata, Segment};
 
+/// Wires five pipeline stages together and runs them concurrently.
+///
+/// Each stage is spawned as an independent `tokio::spawn` task. Bounded
+/// channels connect adjacent stages. All tasks are joined with `tokio::join!`
+/// — no task is leaked on error or cancellation.
+///
+/// # Cancellation
+///
+/// Pass a [`CancellationToken`] and call `.cancel()` on it to trigger
+/// graceful shutdown. The audio source stops, channels drain in sequence,
+/// and all tasks complete.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use scribe_rs::pipeline::PipelineRunner;
+/// # use scribe_rs::types::Metadata;
+/// # use tokio_util::sync::CancellationToken;
+/// # async fn example(
+/// #     input: Box<dyn scribe_rs::pipeline::AudioInput>,
+/// #     pre: Box<dyn scribe_rs::pipeline::Preprocessor>,
+/// #     eng: Box<dyn scribe_rs::pipeline::TranscriptionEngine>,
+/// #     post: Box<dyn scribe_rs::pipeline::Postprocessor>,
+/// #     sink: Box<dyn scribe_rs::pipeline::OutputSink>,
+/// # ) -> Result<(), scribe_rs::error::ScribeError> {
+/// let runner = PipelineRunner {
+///     input,
+///     preprocessor: pre,
+///     engine: eng,
+///     postprocessor: post,
+///     sink,
+///     cancel: CancellationToken::new(),
+///     metadata: Metadata::default(),
+/// };
+/// runner.run().await
+/// # }
+/// ```
 pub struct PipelineRunner {
     pub input: Box<dyn AudioInput>,
     pub preprocessor: Box<dyn Preprocessor>,
@@ -20,6 +59,11 @@ pub struct PipelineRunner {
 }
 
 impl PipelineRunner {
+    /// Runs the full pipeline to completion.
+    ///
+    /// Creates bounded channels, spawns all five stages, and blocks until
+    /// every task finishes. Returns the first error encountered, or `Ok(())`
+    /// if all stages completed successfully.
     pub async fn run(self) -> Result<(), ScribeError> {
         let (raw_tx, raw_rx) = mpsc::channel::<Vec<f32>>(AUDIO_CHANNEL_CAPACITY);
         let (proc_tx, proc_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);

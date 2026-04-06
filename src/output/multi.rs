@@ -1,3 +1,5 @@
+//! Fan-out output sink that broadcasts segments to multiple inner sinks.
+
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -6,7 +8,26 @@ use crate::error::ScribeError;
 use crate::pipeline::traits::OutputSink;
 use crate::types::{Metadata, Segment};
 
-/// Fans out segments to multiple inner sinks, each running in its own task.
+/// Broadcasts segments to multiple inner sinks concurrently.
+///
+/// Each inner sink is spawned as its own tokio task with a dedicated channel.
+/// Segments are cloned and sent to every sink. All inner tasks are joined
+/// before `run()` returns.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use scribe_rs::output::multi::MultiOutputSink;
+/// # use scribe_rs::output::stdout::StdoutOutputSink;
+/// # use scribe_rs::output::markdown::MarkdownOutputSink;
+/// # use std::path::PathBuf;
+/// let sink = MultiOutputSink {
+///     sinks: vec![
+///         Box::new(StdoutOutputSink),
+///         // ... add more sinks
+///     ],
+/// };
+/// ```
 pub struct MultiOutputSink {
     pub sinks: Vec<Box<dyn OutputSink>>,
 }

@@ -1,3 +1,5 @@
+//! Postprocessor implementations.
+
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -5,7 +7,10 @@ use crate::error::ScribeError;
 use crate::pipeline::traits::Postprocessor;
 use crate::types::Segment;
 
-/// Passthrough postprocessor — forwards segments unchanged.
+/// Passthrough postprocessor that forwards segments unchanged.
+///
+/// Use this as the default. Replace with a custom [`Postprocessor`] to
+/// filter noise tokens, merge short segments, apply punctuation, etc.
 pub struct NoopPostprocessor;
 
 #[async_trait]

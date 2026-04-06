@@ -1,3 +1,14 @@
+//! Whisper model resolution, caching, and download.
+//!
+//! Models are resolved in order:
+//!
+//! 1. **`SCRIBE_MODEL_PATH` env var** — use an explicit file path.
+//! 2. **Local cache** (`~/.cache/scribe-rs/models/`) — reuse a previously downloaded model.
+//! 3. **Download** from HuggingFace — fetches the ggml binary with a progress bar.
+//!
+//! Downloads use a temp-file guard: on failure, the `.tmp` file is cleaned up
+//! automatically. On success, it is atomically renamed to the final path.
+
 use std::io::{Read, Write};
 use std::path::PathBuf;
 

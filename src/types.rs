@@ -1,22 +1,45 @@
+//! Domain types shared across pipeline stages.
+
+/// A timestamped span of transcribed text.
+///
+/// Timestamps are in seconds from the start of the recording.
 #[derive(Debug, Clone)]
 pub struct Segment {
+    /// Start time in seconds.
     pub start: f64,
+    /// End time in seconds.
     pub end: f64,
+    /// Transcribed text for this time span.
     pub text: String,
 }
 
+/// A preprocessed chunk of audio ready for transcription.
+///
+/// Contains mono, resampled, normalized `f32` PCM samples.
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
+    /// Mono PCM samples, normalized to peak 0.95.
     pub samples: Vec<f32>,
+    /// Sample rate of the contained audio (typically 16 kHz for Whisper).
     pub sample_rate: u32,
 }
 
+/// Metadata carried through the pipeline.
+///
+/// Passed into the pipeline at construction, and updated by the
+/// [`TranscriptionEngine`](crate::pipeline::traits::TranscriptionEngine)
+/// during inference (e.g., detected language).
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
+    /// Whisper model name (e.g., "base", "small").
     pub model: String,
+    /// Language code (e.g., "en"), or `None` for auto-detect.
     pub language: Option<String>,
 }
 
+/// Complete transcript with metadata.
+///
+/// Useful for programmatic access to transcription results.
 #[derive(Debug, Clone)]
 pub struct TranscriptResult {
     pub segments: Vec<Segment>,
@@ -25,6 +48,7 @@ pub struct TranscriptResult {
 }
 
 impl TranscriptResult {
+    /// Joins all segment text into a single string.
     pub fn full_text(&self) -> String {
         self.segments
             .iter()
@@ -34,6 +58,7 @@ impl TranscriptResult {
     }
 }
 
+/// Formats seconds as `MM:SS` or `HH:MM:SS` for display.
 pub fn format_timestamp(seconds: f64) -> String {
     let total = seconds as u64;
     let h = total / 3600;

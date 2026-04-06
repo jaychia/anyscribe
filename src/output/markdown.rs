@@ -1,3 +1,5 @@
+//! Markdown output sink with YAML frontmatter.
+
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -8,9 +10,39 @@ use crate::error::ScribeError;
 use crate::pipeline::traits::OutputSink;
 use crate::types::{format_duration, format_timestamp, Metadata, Segment};
 
+/// Collects all segments and writes a markdown file with YAML frontmatter.
+///
+/// The file is written atomically when the input channel closes (i.e., when
+/// the pipeline completes). The output path is derived from `recorded_at`
+/// and an optional `title`.
+///
+/// # Output format
+///
+/// ```markdown
+/// ---
+/// date: 2026-03-14T14:30:00
+/// duration: "5:00"
+/// language: en
+/// model: base
+/// tags:
+///   - meeting
+///   - scribe-rs
+/// ---
+///
+/// # Meeting Notes — 2026-03-14 14:30
+///
+/// ## Transcript
+///
+/// **[00:00]** First segment text
+///
+/// **[00:30]** Second segment text
+/// ```
 pub struct MarkdownOutputSink {
+    /// Directory where the markdown file will be written.
     pub notes_dir: PathBuf,
+    /// Timestamp used for the filename and frontmatter.
     pub recorded_at: NaiveDateTime,
+    /// Optional title for the filename (sanitized to filesystem-safe characters).
     pub title: Option<String>,
 }
 

@@ -1,3 +1,9 @@
+//! Whisper-based transcription engine.
+//!
+//! Accumulates audio into 30-second windows with 5-second overlap,
+//! runs whisper inference on a blocking thread pool, and emits
+//! timestamped [`Segment`]s.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,7 +19,8 @@ use crate::preprocess::normalize;
 use crate::transcribe::model::resolve_model_path;
 use crate::types::{AudioChunk, Metadata, Segment};
 
-/// Inner engine wrapping whisper-rs context. Shared via Arc for spawn_blocking.
+/// Inner whisper-rs wrapper. Shared via `Arc` so `spawn_blocking` closures
+/// can call `transcribe()` without moving the context.
 struct WhisperEngine {
     ctx: WhisperContext,
 }
@@ -104,6 +111,27 @@ struct TranscribeResult {
     language: String,
 }
 
+/// Local Whisper transcription engine using whisper-rs (whisper.cpp).
+///
+/// # Windowing strategy
+///
+/// Audio is accumulated into a buffer. When the buffer reaches 30 seconds,
+/// a window is extracted and transcribed. After transcription, the last 5
+/// seconds are kept as overlap for cross-boundary context. This continues
+/// until the input channel closes or cancellation is requested. Any remaining
+/// audio (> 1 second) is transcribed as a final chunk.
+///
+/// # Blocking work
+///
+/// Whisper inference is CPU-bound and runs on tokio's blocking thread pool
+/// via `spawn_blocking`. The async `run()` loop stays responsive to new
+/// audio chunks and cancellation while inference is in progress.
+///
+/// # Model management
+///
+/// Models are resolved via [`crate::transcribe::model::resolve_model_path`]:
+/// environment variable override, local cache, or automatic download from
+/// HuggingFace.
 pub struct WhisperTranscriptionEngine {
     engine: Arc<WhisperEngine>,
     sample_rate: u32,
@@ -111,6 +139,10 @@ pub struct WhisperTranscriptionEngine {
 }
 
 impl WhisperTranscriptionEngine {
+    /// Creates a new engine, loading the specified whisper model.
+    ///
+    /// Downloads the model from HuggingFace if not already cached.
+    /// Valid model sizes: `tiny`, `base`, `small`, `medium`, `large-v3`.
     pub fn new(model_size: &str, sample_rate: u32) -> Result<Self, ScribeError> {
         let engine = WhisperEngine::new(model_size)?;
         Ok(Self {

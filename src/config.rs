@@ -1,3 +1,7 @@
+//! TOML-based configuration: load, save, validate, and interactive setup.
+//!
+//! Configuration is stored at `~/.config/scribe-rs/config.toml`.
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
