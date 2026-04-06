@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use anyscribe::audio::wav::WavWriter;
 use anyscribe::error::ScribeError;
 use anyscribe::pipeline::traits::*;
 use anyscribe::pipeline::PipelineRunner;
@@ -25,24 +26,35 @@ impl AudioInput for MockAudioInput {
 
     async fn run(
         &mut self,
-        output: mpsc::Sender<Vec<f32>>,
+        output: mpsc::Sender<AudioNotification>,
         cancel: CancellationToken,
     ) -> Result<(), ScribeError> {
+        let mut wav_writer =
+            WavWriter::new(&self.info.wav_path, self.info.sample_rate, self.info.channels)?;
+
         for chunk in &self.chunks {
             if cancel.is_cancelled() {
                 break;
             }
-            if output.send(chunk.clone()).await.is_err() {
+            wav_writer.write_samples(chunk)?;
+            if output
+                .send(AudioNotification {
+                    num_samples: chunk.len(),
+                })
+                .await
+                .is_err()
+            {
                 break;
             }
         }
-        // Drop output sender to signal end of audio
+
+        wav_writer.finalize()?;
         drop(output);
         Ok(())
     }
 }
 
-// ── Mock Preprocessor (passthrough) ────────────────────────────────
+// ── Mock Preprocessor (passthrough, reads from WAV) ───────────────
 
 struct MockPreprocessor;
 
@@ -50,11 +62,14 @@ struct MockPreprocessor;
 impl Preprocessor for MockPreprocessor {
     async fn run(
         &mut self,
-        mut input: mpsc::Receiver<Vec<f32>>,
+        mut input: mpsc::Receiver<AudioNotification>,
         output: mpsc::Sender<AudioChunk>,
         info: AudioInputInfo,
     ) -> Result<(), ScribeError> {
-        while let Some(raw) = input.recv().await {
+        let mut wav_reader = anyscribe::audio::wav::WavReader::new(&info.wav_path)?;
+
+        while let Some(notification) = input.recv().await {
+            let raw = wav_reader.read_samples(notification.num_samples)?;
             let chunk = AudioChunk {
                 samples: raw,
                 sample_rate: info.sample_rate,
@@ -144,23 +159,34 @@ async fn collect_segments(
     }
 }
 
+// ── Helper: create mock input with temp WAV ───────────────────────
+
+fn mock_input(dir: &tempfile::TempDir, chunks: Vec<Vec<f32>>) -> MockAudioInput {
+    MockAudioInput {
+        info: AudioInputInfo {
+            sample_rate: 16000,
+            channels: 1,
+            wav_path: dir.path().join("test.wav"),
+        },
+        chunks,
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_pipeline_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
     let collected = Arc::new(Mutex::new(Vec::new()));
 
-    let input = MockAudioInput {
-        info: AudioInputInfo {
-            sample_rate: 16000,
-            channels: 1,
-        },
-        chunks: vec![
+    let input = mock_input(
+        &dir,
+        vec![
             vec![0.1; 1600], // 100ms at 16kHz
             vec![0.2; 1600],
             vec![0.3; 1600],
         ],
-    };
+    );
 
     let runner = PipelineRunner::new(
         Box::new(input),
@@ -188,23 +214,18 @@ async fn test_pipeline_end_to_end() {
     assert_eq!(segs[0].text, "segment 0");
     assert_eq!(segs[1].text, "segment 1");
     assert_eq!(segs[2].text, "segment 2");
+
+    // WAV file should exist on disk
+    assert!(dir.path().join("test.wav").exists());
 }
 
 #[tokio::test]
 async fn test_pipeline_multiple_subscribers() {
+    let dir = tempfile::tempdir().unwrap();
     let collected_a = Arc::new(Mutex::new(Vec::new()));
     let collected_b = Arc::new(Mutex::new(Vec::new()));
 
-    let input = MockAudioInput {
-        info: AudioInputInfo {
-            sample_rate: 16000,
-            channels: 1,
-        },
-        chunks: vec![
-            vec![0.1; 1600],
-            vec![0.2; 1600],
-        ],
-    };
+    let input = mock_input(&dir, vec![vec![0.1; 1600], vec![0.2; 1600]]);
 
     let runner = PipelineRunner::new(
         Box::new(input),
@@ -236,15 +257,10 @@ async fn test_pipeline_multiple_subscribers() {
 
 #[tokio::test]
 async fn test_pipeline_empty_input() {
+    let dir = tempfile::tempdir().unwrap();
     let collected = Arc::new(Mutex::new(Vec::new()));
 
-    let input = MockAudioInput {
-        info: AudioInputInfo {
-            sample_rate: 16000,
-            channels: 1,
-        },
-        chunks: vec![], // No audio
-    };
+    let input = mock_input(&dir, vec![]);
 
     let runner = PipelineRunner::new(
         Box::new(input),
@@ -270,8 +286,10 @@ async fn test_pipeline_empty_input() {
 
 #[tokio::test]
 async fn test_pipeline_cancellation() {
+    let dir = tempfile::tempdir().unwrap();
     let collected = Arc::new(Mutex::new(Vec::new()));
     let cancel = CancellationToken::new();
+    let wav_path = dir.path().join("cancel.wav");
 
     // AudioInput that sends one chunk then waits for cancel
     struct CancelWaitInput {
@@ -286,11 +304,22 @@ async fn test_pipeline_cancellation() {
 
         async fn run(
             &mut self,
-            output: mpsc::Sender<Vec<f32>>,
+            output: mpsc::Sender<AudioNotification>,
             cancel: CancellationToken,
         ) -> Result<(), ScribeError> {
-            let _ = output.send(vec![0.5; 1600]).await;
+            let mut wav_writer =
+                WavWriter::new(&self.info.wav_path, self.info.sample_rate, self.info.channels)?;
+
+            let chunk = vec![0.5; 1600];
+            wav_writer.write_samples(&chunk)?;
+            let _ = output
+                .send(AudioNotification {
+                    num_samples: chunk.len(),
+                })
+                .await;
+
             cancel.cancelled().await;
+            wav_writer.finalize()?;
             Ok(())
         }
     }
@@ -301,6 +330,7 @@ async fn test_pipeline_cancellation() {
             info: AudioInputInfo {
                 sample_rate: 16000,
                 channels: 1,
+                wav_path,
             },
         }),
         Box::new(MockPreprocessor),
@@ -380,21 +410,19 @@ impl TranscriptionEngine for FailingMockTranscriptionEngine {
 
 #[tokio::test]
 async fn test_pipeline_skips_failing_chunks() {
+    let dir = tempfile::tempdir().unwrap();
     let collected = Arc::new(Mutex::new(Vec::new()));
 
-    let input = MockAudioInput {
-        info: AudioInputInfo {
-            sample_rate: 16000,
-            channels: 1,
-        },
-        chunks: vec![
+    let input = mock_input(
+        &dir,
+        vec![
             vec![0.1; 1600], // chunk 0 — will succeed
             vec![0.2; 1600], // chunk 1 — will fail
             vec![0.3; 1600], // chunk 2 — will succeed
             vec![0.4; 1600], // chunk 3 — will fail
             vec![0.5; 1600], // chunk 4 — will succeed
         ],
-    };
+    );
 
     let fail_on: HashSet<usize> = [1, 3].into_iter().collect();
 

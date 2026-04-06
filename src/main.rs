@@ -71,12 +71,22 @@ fn load_and_validate_config() -> anyhow::Result<anyscribe::config::Config> {
 async fn cmd_record() -> anyhow::Result<()> {
     let config = load_and_validate_config()?;
 
-    let input = CpalAudioInput::new()?;
-    let info = input.info();
+    let recorded_at = chrono::Local::now().naive_local();
+    let notes_dir = config.notes_dir();
+    std::fs::create_dir_all(&notes_dir)?;
+
+    let wav_filename = recorded_at
+        .format("%Y-%m-%d_%H-%M_recording.wav")
+        .to_string();
+    let wav_path = notes_dir.join(&wav_filename);
+
+    let input = CpalAudioInput::new(wav_path.clone())?;
+    let input_info = input.info();
     info!(
-        channels = info.channels,
-        sample_rate = info.sample_rate,
+        channels = input_info.channels,
+        sample_rate = input_info.sample_rate,
         target_rate = config.sample_rate,
+        wav = %wav_path.display(),
         "audio device detected"
     );
     info!("recording — press Enter or Ctrl+C to stop");
@@ -101,8 +111,6 @@ async fn cmd_record() -> anyhow::Result<()> {
         }
         cancel_clone.cancel();
     });
-
-    let recorded_at = chrono::Local::now().naive_local();
 
     let metadata = Metadata {
         model: config.whisper_model.clone(),

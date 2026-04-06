@@ -5,12 +5,14 @@
 //! channel endpoints, processes data until the input closes or cancellation
 //! is requested, then returns `Result<(), ScribeError>`.
 
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::ScribeError;
-use crate::types::{AudioChunk, Metadata, Segment};
+use crate::types::{AudioChunk, AudioNotification, Metadata, Segment};
 
 // ── Source ─────────────────────────────────────────────────────────
 
@@ -25,6 +27,8 @@ pub struct AudioInputInfo {
     pub sample_rate: u32,
     /// Number of interleaved channels (1 = mono, 2 = stereo).
     pub channels: u16,
+    /// Path to the WAV file where raw audio is buffered on disk.
+    pub wav_path: PathBuf,
 }
 
 /// Push-based audio source.
@@ -49,10 +53,11 @@ pub trait AudioInput: Send {
     /// Returns the audio device format. Available immediately after construction.
     fn info(&self) -> &AudioInputInfo;
 
-    /// Starts capturing audio and pushing into `output` until `cancel` fires.
+    /// Starts capturing audio, writing to the WAV disk buffer, and sending
+    /// notifications into `output` until `cancel` fires.
     async fn run(
         &mut self,
-        output: mpsc::Sender<Vec<f32>>,
+        output: mpsc::Sender<AudioNotification>,
         cancel: CancellationToken,
     ) -> Result<(), ScribeError>;
 }
@@ -61,8 +66,9 @@ pub trait AudioInput: Send {
 
 /// Transforms raw device audio into normalized mono chunks at a target sample rate.
 ///
-/// Reads raw interleaved PCM from `input`, applies format conversion (mono
-/// downmix, resampling, normalization), and sends [`AudioChunk`]s to `output`.
+/// Receives [`AudioNotification`]s indicating new data is available on disk,
+/// reads the raw interleaved PCM from the WAV file, applies format conversion
+/// (mono downmix, resampling, normalization), and sends [`AudioChunk`]s to `output`.
 /// Runs until the input channel closes.
 ///
 /// See [`crate::preprocess::DefaultPreprocessor`] for the built-in implementation.
@@ -70,7 +76,7 @@ pub trait AudioInput: Send {
 pub trait Preprocessor: Send {
     async fn run(
         &mut self,
-        input: mpsc::Receiver<Vec<f32>>,
+        input: mpsc::Receiver<AudioNotification>,
         output: mpsc::Sender<AudioChunk>,
         info: AudioInputInfo,
     ) -> Result<(), ScribeError>;

@@ -24,10 +24,11 @@
 //! use anyscribe::transcribe::whisper::WhisperTranscriptionEngine;
 //! use anyscribe::types::Metadata;
 //! use tokio_util::sync::CancellationToken;
+//! use std::path::PathBuf;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let runner = PipelineRunner::new(
-//!     Box::new(CpalAudioInput::new()?),
+//!     Box::new(CpalAudioInput::new(PathBuf::from("/tmp/recording.wav"))?),
 //!     Box::new(DefaultPreprocessor { target_sample_rate: 16000 }),
 //!     Box::new(WhisperTranscriptionEngine::new("base", 16000)?),
 //!     Box::new(NoopPostprocessor),

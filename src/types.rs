@@ -13,6 +13,17 @@ pub struct Segment {
     pub text: String,
 }
 
+/// Notification that new audio samples have been written to the WAV disk buffer.
+///
+/// Sent by [`AudioInput`](crate::pipeline::traits::AudioInput) after writing
+/// samples to the WAV file. The [`Preprocessor`](crate::pipeline::traits::Preprocessor)
+/// reads the corresponding samples from disk when it receives this notification.
+#[derive(Debug, Clone)]
+pub struct AudioNotification {
+    /// Number of new interleaved f32 samples written to the WAV file.
+    pub num_samples: usize,
+}
+
 /// A preprocessed chunk of audio ready for transcription.
 ///
 /// Contains mono, resampled, normalized `f32` PCM samples.

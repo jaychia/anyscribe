@@ -10,7 +10,7 @@ use tracing::Instrument;
 
 use crate::constants::{AUDIO_CHANNEL_CAPACITY, SEGMENT_CHANNEL_CAPACITY};
 use crate::error::ScribeError;
-use crate::types::{AudioChunk, Metadata, Segment};
+use crate::types::{AudioChunk, AudioNotification, Metadata, Segment};
 
 /// Wires pipeline stages together and broadcasts segments to subscribers.
 ///
@@ -102,7 +102,7 @@ impl PipelineRunner {
     /// completed successfully.
     #[tracing::instrument(name = "pipeline", skip_all)]
     pub async fn run(self) -> Result<(), ScribeError> {
-        let (raw_tx, raw_rx) = mpsc::channel::<Vec<f32>>(AUDIO_CHANNEL_CAPACITY);
+        let (raw_tx, raw_rx) = mpsc::channel::<AudioNotification>(AUDIO_CHANNEL_CAPACITY);
         let (proc_tx, proc_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);
         let (seg_tx, seg_rx) = mpsc::channel::<Segment>(SEGMENT_CHANNEL_CAPACITY);
         let (post_tx, post_rx) = mpsc::channel::<Segment>(SEGMENT_CHANNEL_CAPACITY);

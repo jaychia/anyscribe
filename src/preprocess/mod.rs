@@ -8,9 +8,10 @@ use async_trait::async_trait;
 use tracing::debug;
 use tokio::sync::mpsc;
 
+use crate::audio::wav::WavReader;
 use crate::error::ScribeError;
 use crate::pipeline::traits::{AudioInputInfo, Preprocessor};
-use crate::types::AudioChunk;
+use crate::types::{AudioChunk, AudioNotification};
 
 const TARGET_PEAK: f32 = 0.95;
 
@@ -60,7 +61,8 @@ pub fn normalize(audio: &[f32]) -> Vec<f32> {
 
 /// Default preprocessor: mono downmix -> linear resample -> peak normalize.
 ///
-/// Converts raw device audio (arbitrary channels and sample rate) into
+/// Reads audio samples from the WAV disk buffer based on notifications,
+/// converts raw device audio (arbitrary channels and sample rate) into
 /// normalized mono [`AudioChunk`]s at `target_sample_rate`.
 pub struct DefaultPreprocessor {
     /// Target sample rate for output chunks (typically 16000 for Whisper).
@@ -72,14 +74,17 @@ impl Preprocessor for DefaultPreprocessor {
     #[tracing::instrument(name = "preprocessor", skip_all, fields(target_rate = self.target_sample_rate))]
     async fn run(
         &mut self,
-        mut input: mpsc::Receiver<Vec<f32>>,
+        mut input: mpsc::Receiver<AudioNotification>,
         output: mpsc::Sender<AudioChunk>,
         info: AudioInputInfo,
     ) -> Result<(), ScribeError> {
+        let mut wav_reader = WavReader::new(&info.wav_path)?;
         let mut chunk_count: u64 = 0;
 
-        while let Some(raw) = input.recv().await {
+        while let Some(notification) = input.recv().await {
             chunk_count += 1;
+
+            let raw = wav_reader.read_samples(notification.num_samples)?;
 
             let mono = to_mono(&raw, info.channels);
             let resampled = resample(&mono, info.sample_rate, self.target_sample_rate);
@@ -104,6 +109,7 @@ impl Preprocessor for DefaultPreprocessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::wav::WavWriter;
 
     #[test]
     fn test_to_mono_single_channel() {
@@ -164,7 +170,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_preprocessor_run() {
-        let (raw_tx, raw_rx) = mpsc::channel(10);
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("test.wav");
+
+        // Write test data to WAV file
+        let stereo: Vec<f32> = (0..480).map(|i| (i % 2) as f32).collect();
+        let mut writer = WavWriter::new(&wav_path, 48000, 2).unwrap();
+        writer.write_samples(&stereo).unwrap();
+        writer.finalize().unwrap();
+
+        let (notif_tx, notif_rx) = mpsc::channel(10);
         let (proc_tx, mut proc_rx) = mpsc::channel(10);
 
         let mut pre = DefaultPreprocessor {
@@ -174,15 +189,18 @@ mod tests {
         let info = AudioInputInfo {
             sample_rate: 48000,
             channels: 2,
+            wav_path,
         };
 
-        let handle = tokio::spawn(async move { pre.run(raw_rx, proc_tx, info).await });
+        let handle = tokio::spawn(async move { pre.run(notif_rx, proc_tx, info).await });
 
-        // Send 480 stereo samples = 240 mono frames at 48kHz
+        // Send notification: 480 interleaved stereo samples = 240 mono frames at 48kHz
         // After resample to 16kHz: 240 / 3 = 80 samples
-        let stereo: Vec<f32> = (0..480).map(|i| (i % 2) as f32).collect();
-        raw_tx.send(stereo).await.unwrap();
-        drop(raw_tx);
+        notif_tx
+            .send(AudioNotification { num_samples: 480 })
+            .await
+            .unwrap();
+        drop(notif_tx);
 
         let chunk = proc_rx.recv().await.unwrap();
         assert_eq!(chunk.samples.len(), 80);
