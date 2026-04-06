@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use anyscribe::error::ScribeError;
@@ -128,23 +128,18 @@ impl Postprocessor for MockPostprocessor {
     }
 }
 
-// ── Mock OutputSink (collecting) ───────────────────────────────────
+// ── Collecting subscriber helper ──────────────────────────────────
 
-struct CollectingSink {
+async fn collect_segments(
+    mut rx: broadcast::Receiver<Segment>,
     collected: Arc<Mutex<Vec<Segment>>>,
-}
-
-#[async_trait]
-impl OutputSink for CollectingSink {
-    async fn run(
-        &mut self,
-        mut input: mpsc::Receiver<Segment>,
-        _metadata: Metadata,
-    ) -> Result<(), ScribeError> {
-        while let Some(seg) = input.recv().await {
-            self.collected.lock().unwrap().push(seg);
+) {
+    loop {
+        match rx.recv().await {
+            Ok(seg) => collected.lock().unwrap().push(seg),
+            Err(broadcast::error::RecvError::Closed) => break,
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
         }
-        Ok(())
     }
 }
 
@@ -166,30 +161,76 @@ async fn test_pipeline_end_to_end() {
         ],
     };
 
-    let runner = PipelineRunner {
-        input: Box::new(input),
-        preprocessor: Box::new(MockPreprocessor),
-        engine: Box::new(MockTranscriptionEngine {
+    let runner = PipelineRunner::new(
+        Box::new(input),
+        Box::new(MockPreprocessor),
+        Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
-        postprocessor: Box::new(MockPostprocessor),
-        sink: Box::new(CollectingSink {
-            collected: collected.clone(),
-        }),
-        cancel: CancellationToken::new(),
-        metadata: Metadata {
+        Box::new(MockPostprocessor),
+        CancellationToken::new(),
+        Metadata {
             model: "test".to_string(),
             language: None,
         },
-    };
+    );
+
+    let rx = runner.subscribe();
+    let collected_clone = collected.clone();
+    let sub_h = tokio::spawn(collect_segments(rx, collected_clone));
 
     runner.run().await.unwrap();
+    sub_h.await.unwrap();
 
     let segs = collected.lock().unwrap();
     assert_eq!(segs.len(), 3);
     assert_eq!(segs[0].text, "segment 0");
     assert_eq!(segs[1].text, "segment 1");
     assert_eq!(segs[2].text, "segment 2");
+}
+
+#[tokio::test]
+async fn test_pipeline_multiple_subscribers() {
+    let collected_a = Arc::new(Mutex::new(Vec::new()));
+    let collected_b = Arc::new(Mutex::new(Vec::new()));
+
+    let input = MockAudioInput {
+        info: AudioInputInfo {
+            sample_rate: 16000,
+            channels: 1,
+        },
+        chunks: vec![
+            vec![0.1; 1600],
+            vec![0.2; 1600],
+        ],
+    };
+
+    let runner = PipelineRunner::new(
+        Box::new(input),
+        Box::new(MockPreprocessor),
+        Box::new(MockTranscriptionEngine {
+            updated_meta: Metadata::default(),
+        }),
+        Box::new(MockPostprocessor),
+        CancellationToken::new(),
+        Metadata::default(),
+    );
+
+    let rx_a = runner.subscribe();
+    let rx_b = runner.subscribe();
+    let ha = tokio::spawn(collect_segments(rx_a, collected_a.clone()));
+    let hb = tokio::spawn(collect_segments(rx_b, collected_b.clone()));
+
+    runner.run().await.unwrap();
+    ha.await.unwrap();
+    hb.await.unwrap();
+
+    let a = collected_a.lock().unwrap();
+    let b = collected_b.lock().unwrap();
+    assert_eq!(a.len(), 2);
+    assert_eq!(b.len(), 2);
+    assert_eq!(a[0].text, "segment 0");
+    assert_eq!(b[1].text, "segment 1");
 }
 
 #[tokio::test]
@@ -204,21 +245,23 @@ async fn test_pipeline_empty_input() {
         chunks: vec![], // No audio
     };
 
-    let runner = PipelineRunner {
-        input: Box::new(input),
-        preprocessor: Box::new(MockPreprocessor),
-        engine: Box::new(MockTranscriptionEngine {
+    let runner = PipelineRunner::new(
+        Box::new(input),
+        Box::new(MockPreprocessor),
+        Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
-        postprocessor: Box::new(MockPostprocessor),
-        sink: Box::new(CollectingSink {
-            collected: collected.clone(),
-        }),
-        cancel: CancellationToken::new(),
-        metadata: Metadata::default(),
-    };
+        Box::new(MockPostprocessor),
+        CancellationToken::new(),
+        Metadata::default(),
+    );
+
+    let rx = runner.subscribe();
+    let collected_clone = collected.clone();
+    let sub_h = tokio::spawn(collect_segments(rx, collected_clone));
 
     runner.run().await.unwrap();
+    sub_h.await.unwrap();
 
     let segs = collected.lock().unwrap();
     assert!(segs.is_empty());
@@ -252,24 +295,25 @@ async fn test_pipeline_cancellation() {
     }
 
     let cancel_clone = cancel.clone();
-    let runner = PipelineRunner {
-        input: Box::new(CancelWaitInput {
+    let runner = PipelineRunner::new(
+        Box::new(CancelWaitInput {
             info: AudioInputInfo {
                 sample_rate: 16000,
                 channels: 1,
             },
         }),
-        preprocessor: Box::new(MockPreprocessor),
-        engine: Box::new(MockTranscriptionEngine {
+        Box::new(MockPreprocessor),
+        Box::new(MockTranscriptionEngine {
             updated_meta: Metadata::default(),
         }),
-        postprocessor: Box::new(MockPostprocessor),
-        sink: Box::new(CollectingSink {
-            collected: collected.clone(),
-        }),
+        Box::new(MockPostprocessor),
         cancel,
-        metadata: Metadata::default(),
-    };
+        Metadata::default(),
+    );
+
+    let rx = runner.subscribe();
+    let collected_clone = collected.clone();
+    let sub_h = tokio::spawn(collect_segments(rx, collected_clone));
 
     // Cancel after a short delay
     tokio::spawn(async move {
@@ -278,6 +322,7 @@ async fn test_pipeline_cancellation() {
     });
 
     runner.run().await.unwrap();
+    sub_h.await.unwrap();
 
     let segs = collected.lock().unwrap();
     // Should have at least the one segment from the chunk sent before cancel

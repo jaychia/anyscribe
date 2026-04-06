@@ -2,17 +2,15 @@
 
 use std::path::PathBuf;
 
-use async_trait::async_trait;
 use chrono::NaiveDateTime;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 use crate::error::ScribeError;
-use crate::pipeline::traits::OutputSink;
 use crate::types::{format_duration, format_timestamp, Metadata, Segment};
 
 /// Collects all segments and writes a markdown file with YAML frontmatter.
 ///
-/// The file is written atomically when the input channel closes (i.e., when
+/// The file is written atomically when the broadcast channel closes (i.e., when
 /// the pipeline completes). The output path is derived from `recorded_at`
 /// and an optional `title`.
 ///
@@ -101,18 +99,22 @@ impl MarkdownOutputSink {
         };
         self.notes_dir.join(filename)
     }
-}
 
-#[async_trait]
-impl OutputSink for MarkdownOutputSink {
-    async fn run(
-        &mut self,
-        mut input: mpsc::Receiver<Segment>,
+    /// Consumes segments from a broadcast receiver and writes a markdown file on completion.
+    pub async fn run(
+        self,
+        mut input: broadcast::Receiver<Segment>,
         metadata: Metadata,
     ) -> Result<(), ScribeError> {
         let mut segments = Vec::new();
-        while let Some(seg) = input.recv().await {
-            segments.push(seg);
+        loop {
+            match input.recv().await {
+                Ok(seg) => segments.push(seg),
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("markdown subscriber lagged, skipped {n} segments");
+                }
+            }
         }
 
         let content = self.generate_markdown(&segments, &metadata);
@@ -216,27 +218,26 @@ mod tests {
     #[tokio::test]
     async fn test_sink_run_writes_file() {
         let dir = tempfile::tempdir().unwrap();
-        let mut sink = test_sink(dir.path().to_path_buf());
+        let sink = test_sink(dir.path().to_path_buf());
         let metadata = Metadata {
             model: "base".to_string(),
             language: Some("en".to_string()),
         };
 
-        let (tx, rx) = mpsc::channel(10);
+        let (tx, rx) = broadcast::channel(10);
         tx.send(Segment {
             start: 0.0,
             end: 5.0,
             text: "Hello".to_string(),
         })
-        .await
         .unwrap();
         drop(tx);
 
+        let output_path = sink.output_path();
         sink.run(rx, metadata).await.unwrap();
 
-        let path = sink.output_path();
-        assert!(path.exists());
-        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(output_path.exists());
+        let content = std::fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("Hello"));
     }
 }

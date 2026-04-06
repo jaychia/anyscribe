@@ -3,8 +3,8 @@ use tokio_util::sync::CancellationToken;
 
 use anyscribe::audio::cpal_input::CpalAudioInput;
 use anyscribe::config::{config_path, first_run_setup, load_config, save_config};
+use anyscribe::error::ScribeError;
 use anyscribe::output::markdown::MarkdownOutputSink;
-use anyscribe::output::multi::MultiOutputSink;
 use anyscribe::output::stdout::StdoutOutputSink;
 use anyscribe::pipeline::traits::AudioInput;
 use anyscribe::pipeline::PipelineRunner;
@@ -100,33 +100,45 @@ async fn cmd_record() -> anyhow::Result<()> {
 
     let recorded_at = chrono::Local::now().naive_local();
 
-    let sink = MultiOutputSink {
-        sinks: vec![
-            Box::new(StdoutOutputSink),
-            Box::new(MarkdownOutputSink {
-                notes_dir: config.notes_dir(),
-                recorded_at,
-                title: None,
-            }),
-        ],
+    let metadata = Metadata {
+        model: config.whisper_model.clone(),
+        language: config.language.clone(),
     };
 
-    let runner = PipelineRunner {
-        input: Box::new(input),
-        preprocessor: Box::new(DefaultPreprocessor {
+    let runner = PipelineRunner::new(
+        Box::new(input),
+        Box::new(DefaultPreprocessor {
             target_sample_rate: config.sample_rate,
         }),
-        engine: Box::new(engine),
-        postprocessor: Box::new(NoopPostprocessor),
-        sink: Box::new(sink),
+        Box::new(engine),
+        Box::new(NoopPostprocessor),
         cancel,
-        metadata: Metadata {
-            model: config.whisper_model.clone(),
-            language: config.language.clone(),
-        },
-    };
+        metadata.clone(),
+    );
 
+    // Register subscribers before starting the pipeline.
+    let stdout_rx = runner.subscribe();
+    let md_rx = runner.subscribe();
+
+    let stdout_h = tokio::spawn(async move { StdoutOutputSink.run(stdout_rx).await });
+
+    let md_sink = MarkdownOutputSink {
+        notes_dir: config.notes_dir(),
+        recorded_at,
+        title: None,
+    };
+    let md_meta = metadata;
+    let md_h = tokio::spawn(async move { md_sink.run(md_rx, md_meta).await });
+
+    // Run the pipeline — subscribers receive segments via broadcast.
     runner.run().await?;
+
+    // Wait for subscribers to finish processing.
+    stdout_h
+        .await
+        .map_err(|e| ScribeError::Pipeline(format!("stdout subscriber panicked: {e}")))??;
+    md_h.await
+        .map_err(|e| ScribeError::Pipeline(format!("markdown subscriber panicked: {e}")))??;
 
     Ok(())
 }

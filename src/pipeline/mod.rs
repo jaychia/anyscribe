@@ -4,18 +4,18 @@ pub mod traits;
 
 pub use traits::*;
 
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::constants::{AUDIO_CHANNEL_CAPACITY, SEGMENT_CHANNEL_CAPACITY};
 use crate::error::ScribeError;
 use crate::types::{AudioChunk, Metadata, Segment};
 
-/// Wires five pipeline stages together and runs them concurrently.
+/// Wires pipeline stages together and broadcasts segments to subscribers.
 ///
 /// Each stage is spawned as an independent `tokio::spawn` task. Bounded
-/// channels connect adjacent stages. All tasks are joined with `tokio::join!`
-/// — no task is leaked on error or cancellation.
+/// channels connect adjacent stages. Segments emitted by the postprocessor
+/// are broadcast to all subscribers registered via [`subscribe`](PipelineRunner::subscribe).
 ///
 /// # Cancellation
 ///
@@ -34,17 +34,22 @@ use crate::types::{AudioChunk, Metadata, Segment};
 /// #     pre: Box<dyn anyscribe::pipeline::Preprocessor>,
 /// #     eng: Box<dyn anyscribe::pipeline::TranscriptionEngine>,
 /// #     post: Box<dyn anyscribe::pipeline::Postprocessor>,
-/// #     sink: Box<dyn anyscribe::pipeline::OutputSink>,
 /// # ) -> Result<(), anyscribe::error::ScribeError> {
-/// let runner = PipelineRunner {
+/// let runner = PipelineRunner::new(
 ///     input,
-///     preprocessor: pre,
-///     engine: eng,
-///     postprocessor: post,
-///     sink,
-///     cancel: CancellationToken::new(),
-///     metadata: Metadata::default(),
-/// };
+///     pre,
+///     eng,
+///     post,
+///     CancellationToken::new(),
+///     Metadata::default(),
+/// );
+///
+/// // Subscribe before running — each call returns an independent receiver.
+/// let rx = runner.subscribe();
+/// tokio::spawn(async move {
+///     // consume segments from rx ...
+/// });
+///
 /// runner.run().await
 /// # }
 /// ```
@@ -53,17 +58,47 @@ pub struct PipelineRunner {
     pub preprocessor: Box<dyn Preprocessor>,
     pub engine: Box<dyn TranscriptionEngine>,
     pub postprocessor: Box<dyn Postprocessor>,
-    pub sink: Box<dyn OutputSink>,
     pub cancel: CancellationToken,
     pub metadata: Metadata,
+    segment_tx: broadcast::Sender<Segment>,
 }
 
 impl PipelineRunner {
+    /// Creates a new pipeline runner with a broadcast channel for subscribers.
+    pub fn new(
+        input: Box<dyn AudioInput>,
+        preprocessor: Box<dyn Preprocessor>,
+        engine: Box<dyn TranscriptionEngine>,
+        postprocessor: Box<dyn Postprocessor>,
+        cancel: CancellationToken,
+        metadata: Metadata,
+    ) -> Self {
+        let (segment_tx, _) = broadcast::channel(SEGMENT_CHANNEL_CAPACITY);
+        Self {
+            input,
+            preprocessor,
+            engine,
+            postprocessor,
+            cancel,
+            metadata,
+            segment_tx,
+        }
+    }
+
+    /// Returns a new subscriber that receives all segments emitted by the pipeline.
+    ///
+    /// Call this before [`run`](PipelineRunner::run) — once the pipeline starts,
+    /// any segments sent before a subscriber is created are lost to that subscriber.
+    pub fn subscribe(&self) -> broadcast::Receiver<Segment> {
+        self.segment_tx.subscribe()
+    }
+
     /// Runs the full pipeline to completion.
     ///
-    /// Creates bounded channels, spawns all five stages, and blocks until
-    /// every task finishes. Returns the first error encountered, or `Ok(())`
-    /// if all stages completed successfully.
+    /// Creates bounded channels, spawns all stages, and blocks until
+    /// every task finishes. Segments are broadcast to all subscribers.
+    /// Returns the first error encountered, or `Ok(())` if all stages
+    /// completed successfully.
     pub async fn run(self) -> Result<(), ScribeError> {
         let (raw_tx, raw_rx) = mpsc::channel::<Vec<f32>>(AUDIO_CHANNEL_CAPACITY);
         let (proc_tx, proc_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);
@@ -90,18 +125,25 @@ impl PipelineRunner {
         let mut post = self.postprocessor;
         let post_h = tokio::spawn(async move { post.run(seg_rx, post_tx).await });
 
-        let mut sink = self.sink;
-        let meta_clone = self.metadata.clone();
-        let sink_h = tokio::spawn(async move { sink.run(post_rx, meta_clone).await });
+        // Broadcast segments from the postprocessor to all subscribers.
+        let segment_tx = self.segment_tx;
+        let bcast_h = tokio::spawn(async move {
+            let mut post_rx = post_rx;
+            while let Some(seg) = post_rx.recv().await {
+                // Ignore errors — no active subscribers is fine.
+                let _ = segment_tx.send(seg);
+            }
+            Ok::<_, ScribeError>(())
+        });
 
-        let (input_r, pre_r, eng_r, post_r, sink_r) =
-            tokio::join!(input_h, pre_h, eng_h, post_h, sink_h);
+        let (input_r, pre_r, eng_r, post_r, bcast_r) =
+            tokio::join!(input_h, pre_h, eng_h, post_h, bcast_h);
 
         input_r.map_err(|e| ScribeError::Pipeline(format!("audio panicked: {e}")))??;
         pre_r.map_err(|e| ScribeError::Pipeline(format!("preprocess panicked: {e}")))??;
         eng_r.map_err(|e| ScribeError::Pipeline(format!("transcribe panicked: {e}")))??;
         post_r.map_err(|e| ScribeError::Pipeline(format!("postprocess panicked: {e}")))??;
-        sink_r.map_err(|e| ScribeError::Pipeline(format!("sink panicked: {e}")))??;
+        bcast_r.map_err(|e| ScribeError::Pipeline(format!("broadcast panicked: {e}")))??;
 
         Ok(())
     }

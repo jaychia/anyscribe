@@ -107,7 +107,7 @@ pub trait TranscriptionEngine: Send {
     fn updated_metadata(&self) -> Metadata;
 }
 
-/// Filters or transforms transcript segments between the engine and the sink.
+/// Filters or transforms transcript segments between the engine and subscribers.
 ///
 /// Reads [`Segment`]s from `input`, optionally transforms them, and sends
 /// results to `output`. Runs until the input channel closes.
@@ -121,27 +121,5 @@ pub trait Postprocessor: Send {
         &mut self,
         input: mpsc::Receiver<Segment>,
         output: mpsc::Sender<Segment>,
-    ) -> Result<(), ScribeError>;
-}
-
-// ── Sink ───────────────────────────────────────────────────────────
-
-/// Terminal stage that consumes transcript segments.
-///
-/// Owns its async loop: reads [`Segment`]s from `input` until the channel
-/// closes, then performs any finalization (e.g., writing a file). Receives
-/// [`Metadata`] for context (model name, language) to include in output.
-///
-/// # Built-in sinks
-///
-/// - [`crate::output::stdout::StdoutOutputSink`] — prints `[MM:SS] text` in real time
-/// - [`crate::output::markdown::MarkdownOutputSink`] — writes a markdown file with YAML frontmatter
-/// - [`crate::output::multi::MultiOutputSink`] — fans out to multiple sinks concurrently
-#[async_trait]
-pub trait OutputSink: Send {
-    async fn run(
-        &mut self,
-        input: mpsc::Receiver<Segment>,
-        metadata: Metadata,
     ) -> Result<(), ScribeError>;
 }

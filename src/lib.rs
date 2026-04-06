@@ -2,10 +2,11 @@
 //!
 //! A modular, trait-based real-time transcription pipeline.
 //!
-//! anyscribe defines five pipeline stages connected by bounded async channels:
+//! anyscribe defines four pipeline stages connected by bounded async channels,
+//! with a broadcast channel that fans segments out to any number of subscribers:
 //!
 //! ```text
-//! AudioInput --> Preprocessor --> TranscriptionEngine --> Postprocessor --> OutputSink
+//! AudioInput --> Preprocessor --> TranscriptionEngine --> Postprocessor -->> [subscribers]
 //! ```
 //!
 //! Each stage is an `#[async_trait]` with a uniform `async fn run()` interface.
@@ -25,15 +26,18 @@
 //! use tokio_util::sync::CancellationToken;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let runner = PipelineRunner {
-//!     input: Box::new(CpalAudioInput::new()?),
-//!     preprocessor: Box::new(DefaultPreprocessor { target_sample_rate: 16000 }),
-//!     engine: Box::new(WhisperTranscriptionEngine::new("base", 16000)?),
-//!     postprocessor: Box::new(NoopPostprocessor),
-//!     sink: Box::new(StdoutOutputSink),
-//!     cancel: CancellationToken::new(),
-//!     metadata: Metadata { model: "base".into(), language: None },
-//! };
+//! let runner = PipelineRunner::new(
+//!     Box::new(CpalAudioInput::new()?),
+//!     Box::new(DefaultPreprocessor { target_sample_rate: 16000 }),
+//!     Box::new(WhisperTranscriptionEngine::new("base", 16000)?),
+//!     Box::new(NoopPostprocessor),
+//!     CancellationToken::new(),
+//!     Metadata { model: "base".into(), language: None },
+//! );
+//!
+//! // Subscribe before running — each subscriber gets its own stream of segments.
+//! let rx = runner.subscribe();
+//! tokio::spawn(async move { StdoutOutputSink.run(rx).await });
 //!
 //! runner.run().await?;
 //! # Ok(())
@@ -42,9 +46,10 @@
 //!
 //! ## Implementing custom stages
 //!
-//! Every stage is a trait. Implement [`pipeline::traits::OutputSink`] for a custom
-//! output target, [`pipeline::traits::AudioInput`] for a custom audio source, etc.
+//! Every pipeline stage is a trait. Implement [`pipeline::traits::AudioInput`] for
+//! a custom audio source, [`pipeline::traits::Postprocessor`] for custom filtering, etc.
 //! The [`pipeline::PipelineRunner`] accepts any combination of trait objects.
+//! Subscribers are registered via [`PipelineRunner::subscribe`] before running.
 
 pub mod audio;
 pub mod config;
