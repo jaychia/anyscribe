@@ -223,7 +223,8 @@ impl TranscriptionEngine for OpenAiTranscriptionEngine {
                     }
                 }
                 _ = cancel.cancelled() => {
-                    while let Ok(data) = input.try_recv() {
+                    // Drain until the chunker closes the channel (after its final flush).
+                    while let Some(data) = input.recv().await {
                         self.transcribe_and_send(
                             &data, &metadata.language,
                             &mut detected_language, &output,

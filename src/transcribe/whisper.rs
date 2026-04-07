@@ -253,8 +253,8 @@ impl TranscriptionEngine for WhisperTranscriptionEngine {
                     }
                 }
                 _ = cancel.cancelled() => {
-                    // Drain any remaining chunks from the chunker.
-                    while let Ok(data) = input.try_recv() {
+                    // Drain until the chunker closes the channel (after its final flush).
+                    while let Some(data) = input.recv().await {
                         self.transcribe_and_send(
                             &data, &metadata, &mut last_text,
                             &mut detected_language, &output,

@@ -69,7 +69,8 @@ impl Chunker for OverlapChunker {
                     }
                 }
                 _ = cancel.cancelled() => {
-                    while let Ok(data) = input.try_recv() {
+                    // Drain until upstream closes, so we don't miss in-flight data.
+                    while let Some(data) = input.recv().await {
                         buffer.extend_from_slice(&data.samples);
                     }
                     break;
@@ -153,7 +154,7 @@ impl Chunker for PassthroughChunker {
                     }
                 }
                 _ = cancel.cancelled() => {
-                    while let Ok(mut data) = input.try_recv() {
+                    while let Some(mut data) = input.recv().await {
                         let duration = data.samples.len() as f64 / data.sample_rate as f64;
                         data.offset_secs = offset;
                         offset += duration;
